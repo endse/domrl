@@ -14,7 +14,7 @@ Before diving into the data, here is the high-level architecture of the system.
 graph TD
     subgraph Environment
         U[User Simulator] -->|Clicks, Hover, Scroll| S[State Vector]
-        W[Business Logic] -->|Dynamic Weights (w1, w2, w3)| S
+        W[Business Logic] -->|"Dynamic Weights (w1, w2, w3)"| S
         U -->|Feedback| R[Base Rewards]
         W -->|Weighting| RF[Final Reward Calculation]
     end
@@ -157,6 +157,25 @@ The **Weight Agent** introduces a hierarchy where business objectives are dynami
 *   **Panel 1 (Rewards)**: Shows the agent reliably maintaining satisfaction (Green line) while maximizing scalar reward.
 *   **Panel 2 (Weights)**: The most critical insight. The Weight Agent does NOT converge to static weights. Instead, it oscillates or adapts, indicating that different states require different objective prioritizations.
 *   **Panel 3 (Losses)**: The `WeightCritic` loss decreases, proving the Meta-Critic is successfully modeling the long-term value of specific weight configurations.
+
+---
+
+## 8. Chapter 7: Benchmarks & Personas
+To validate the model's effectiveness, we benchmarked it against baselines and introduced complex user personas.
+
+### Benchmark Results
+![Benchmark](logs/gallery/benchmark_summary.png)
+*   **Performance**: The DOM-RL (SAC) agent consistently outperforms Random and Static baselines across all scenarios.
+*   **Adaptability**: In the 'Safety' scenario (high churn penalty), the agent matches the 'Balanced' performance while minimizing churn, whereas baselines fail.
+
+### User Personas
+The environment now simulates 4 distinct user archetypes:
+1.  **Standard**: Balanced behavior.
+2.  **Binger**: High base enthusiasm (`Enthusiasm > 0.8`), easier to satisfy.
+3.  **Browser**: High scroll velocity (`Scroll > 50`), difficult to engage (low hover).
+4.  **Critic**: Hard to satisfy (`Satisfaction` decays 2x faster), requires perfect matches.
+
+The Weight Agent must learn to identify these personas from the state (`user_features` + `micro_signals`) and adjust its strategy accordingly.
 
 ---
 
