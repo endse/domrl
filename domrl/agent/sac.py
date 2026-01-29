@@ -44,7 +44,7 @@ class SACAgent:
         return action.item()
 
     def update(self, replay_buffer, batch_size=256):
-        state, action, next_state, reward, not_done = replay_buffer.sample(batch_size)
+        state, action, next_state, reward, not_done, _ = replay_buffer.sample(batch_size)
         
         # ------------------- #
         #  Critic Update      #

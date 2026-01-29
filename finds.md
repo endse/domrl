@@ -128,24 +128,35 @@ Moving average of user satisfaction across the entire data collection run.
 Trace analysis of individual episodes to see step-by-step dynamics.
 
 ### Trace 1
-![Trace1](logs/gallery/trace_ep_1_34.png)
+![Trace1](logs/gallery/trace_ep_1_80.png)
 *   **Green**: Satisfaction | **Blue**: Reward | **Purple**: Actions | **Orange**: Scroll
 *   Observe how Satisfaction dips cause Scroll Velocity spikes.
 
 ### Trace 2
-![Trace2](logs/gallery/trace_ep_2_45.png)
+![Trace2](logs/gallery/trace_ep_2_15.png)
 *   A longer episode. Note the stability of actions once a good match is found.
 
 ### Trace 3
-![Trace3](logs/gallery/trace_ep_3_37.png)
+![Trace3](logs/gallery/trace_ep_3_97.png)
 *   Example of recovery or failure.
 
 ### Trace 4
-![Trace4](logs/gallery/trace_ep_4_39.png)
+![Trace4](logs/gallery/trace_ep_4_85.png)
 
 ### Trace 5
-![Trace5](logs/gallery/trace_ep_5_98.png)
+![Trace5](logs/gallery/trace_ep_5_80.png)
 *   Likely a 'Safety' scenario where the agent is very careful to maintain satisfaction.
+
+---
+
+## 7. Chapter 6: Meta-Learning Dynamics
+The **Weight Agent** introduces a hierarchy where business objectives are dynamically tuned.
+
+### Training Progress
+![Training Summary](logs/gallery/training_summary.png)
+*   **Panel 1 (Rewards)**: Shows the agent reliably maintaining satisfaction (Green line) while maximizing scalar reward.
+*   **Panel 2 (Weights)**: The most critical insight. The Weight Agent does NOT converge to static weights. Instead, it oscillates or adapts, indicating that different states require different objective prioritizations.
+*   **Panel 3 (Losses)**: The `WeightCritic` loss decreases, proving the Meta-Critic is successfully modeling the long-term value of specific weight configurations.
 
 ---
 
