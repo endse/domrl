@@ -13,12 +13,14 @@ class ReplayBuffer:
         self.user_features = np.zeros((max_size, 2), dtype=np.float32)
         self.micro_signals = np.zeros((max_size, 3), dtype=np.float32)
         self.weights = np.zeros((max_size, 3), dtype=np.float32)
+        self.persona_id = np.zeros((max_size, 1), dtype=np.int32)
         
         # Storage for Next State
         self.next_history = np.zeros((max_size, 10), dtype=np.int32)
         self.next_user_features = np.zeros((max_size, 2), dtype=np.float32)
         self.next_micro_signals = np.zeros((max_size, 3), dtype=np.float32)
         self.next_weights = np.zeros((max_size, 3), dtype=np.float32)
+        self.next_persona_id = np.zeros((max_size, 1), dtype=np.int32)
 
         self.action = np.zeros((max_size, 1), dtype=np.int32) # Discrete action index
         self.reward = np.zeros((max_size, 1), dtype=np.float32)
@@ -33,12 +35,14 @@ class ReplayBuffer:
         self.user_features[self.ptr] = state['user_features']
         self.micro_signals[self.ptr] = state['micro_signals']
         self.weights[self.ptr] = state['weights']
+        self.persona_id[self.ptr] = state.get('persona_id', 0) # Handle legacy/missing
         
         # Unpack Next State
         self.next_history[self.ptr] = next_state['history']
         self.next_user_features[self.ptr] = next_state['user_features']
         self.next_micro_signals[self.ptr] = next_state['micro_signals']
         self.next_weights[self.ptr] = next_state['weights']
+        self.next_persona_id[self.ptr] = next_state.get('persona_id', 0)
         
         self.action[self.ptr] = action
         self.reward[self.ptr] = reward
@@ -58,14 +62,16 @@ class ReplayBuffer:
                     "history": torch.LongTensor(self.next_history[idx]).to(self.device),
                     "user_features": torch.FloatTensor(self.next_user_features[idx]).to(self.device),
                     "micro_signals": torch.FloatTensor(self.next_micro_signals[idx]).to(self.device),
-                    "weights": torch.FloatTensor(self.next_weights[idx]).to(self.device)
+                    "weights": torch.FloatTensor(self.next_weights[idx]).to(self.device),
+                    "persona_id": torch.LongTensor(self.next_persona_id[idx]).to(self.device).squeeze(-1)
                 }
             else:
                  return {
                     "history": torch.LongTensor(self.history[idx]).to(self.device),
                     "user_features": torch.FloatTensor(self.user_features[idx]).to(self.device),
                     "micro_signals": torch.FloatTensor(self.micro_signals[idx]).to(self.device),
-                    "weights": torch.FloatTensor(self.weights[idx]).to(self.device)
+                    "weights": torch.FloatTensor(self.weights[idx]).to(self.device),
+                    "persona_id": torch.LongTensor(self.persona_id[idx]).to(self.device).squeeze(-1)
                 }
 
         return (

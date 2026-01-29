@@ -30,10 +30,10 @@ class SACAgent:
         # State is a dict of numpy arrays. Convert to dict of tensors with batch dim.
         state_tensor = {}
         for k, v in state.items():
-            if k == 'history':
-                state_tensor[k] = torch.LongTensor(v).to(self.device).unsqueeze(0)
+            if k == 'history' or k == 'persona_id':
+                state_tensor[k] = torch.as_tensor(v, device=self.device, dtype=torch.long).unsqueeze(0)
             else:
-                state_tensor[k] = torch.FloatTensor(v).to(self.device).unsqueeze(0)
+                state_tensor[k] = torch.as_tensor(v, device=self.device, dtype=torch.float32).unsqueeze(0)
                 
         with torch.no_grad():
             if evaluate:

@@ -12,9 +12,12 @@ class StateEncoder(nn.Module):
         self.embedding = nn.Embedding(num_embeddings=action_dim + 1, embedding_dim=16)
         self.gru = nn.GRU(input_size=16, hidden_size=32, batch_first=True)
         
+        # Persona Encoder
+        self.persona_embedding = nn.Embedding(num_embeddings=4, embedding_dim=4)
+        
         # Combined Feature Dimension
-        # GRU_Out(32) + User(2) + Micro(3) + Weights(3) = 40
-        self.fc = nn.Linear(32 + 2 + 3 + 3, hidden_dim)
+        # GRU_Out(32) + User(2) + Micro(3) + Weights(3) + Persona(4) = 44
+        self.fc = nn.Linear(32 + 2 + 3 + 3 + 4, hidden_dim)
         
     def forward(self, state_dict):
         # 1. History -> GRU
@@ -27,9 +30,15 @@ class StateEncoder(nn.Module):
         u = state_dict['user_features']
         m = state_dict['micro_signals']
         w = state_dict['weights']
+        p = state_dict['persona_id']
+        
+        if p.dim() == 2 and p.shape[1] == 1:
+             p = p.squeeze(1) # Ensure (B,) for embedding
+        
+        p_emb = self.persona_embedding(p) # (B, 4)
         
         # 3. Concatenate
-        cat = torch.cat([h_seq, u, m, w], dim=1) # (B, 40)
+        cat = torch.cat([h_seq, u, m, w, p_emb], dim=1) # (B, 44)
         
         # 4. Dense Encode
         x = F.relu(self.fc(cat))

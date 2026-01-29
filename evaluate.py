@@ -1,14 +1,24 @@
 import gymnasium as gym
 import numpy as np
 import torch
-from domrl.env.rec_env import RealTimeRecEnv
-from domrl.agent.sac import SACAgent
 import pandas as pd
 import os
 import glob
+import matplotlib.pyplot as plt
+import seaborn as sns
+from domrl.env.rec_env import RealTimeRecEnv
+from domrl.agent.sac import SACAgent
+from domrl.agent.baselines import RandomAgent, StaticAgent
 
 def load_latest_actor(agent, log_dir="logs"):
     files = glob.glob(f'{log_dir}/actor_*.pth')
+    
+    # Try final first
+    if os.path.exists(f'{log_dir}/actor_final.pth'):
+         print(f"Loading checkpoint: actor_final.pth")
+         agent.actor.load_state_dict(torch.load(f'{log_dir}/actor_final.pth'))
+         return
+
     if not files:
         print("No checkpoints found. Running with random weights (Expect poor performance).")
         return
@@ -16,74 +26,100 @@ def load_latest_actor(agent, log_dir="logs"):
     print(f"Loading checkpoint: {latest}")
     agent.actor.load_state_dict(torch.load(latest))
 
-def run_scenario(env, agent, weights, name, episodes=50):
-    print(f"\n--- Running Scenario: {name} ---")
-    print(f"Weights: Eng={weights[0]}, Sat={weights[1]}, Churn={weights[2]}")
-    
+def run_agent_eval(env, agent, agent_name, scenarios, episodes=20):
     results = []
     
-    for ep in range(episodes):
-        state, _ = env.reset(options={'weights': weights})
-        episode_reward = 0
-        steps = 0
+    for sc_name, weights in scenarios:
+        # print(f"Evaluating {agent_name} on {sc_name}...")
         
-        while True:
-            action = agent.select_action(state, evaluate=True)
-            next_state, reward, terminated, truncated, _ = env.step(action)
+        for ep in range(episodes):
+            state, _ = env.reset(options={'weights': weights})
+            episode_reward = 0
+            steps = 0
             
-            # Scalarize reward for evaluation metric
-            episode_reward += np.dot(reward, weights)
-            state = next_state
-            steps += 1
-            
-            if terminated or truncated:
-                break
+            while True:
+                # Handle different agent signatures if needed, but here all match
+                action = agent.select_action(state, evaluate=True)
+                next_state, reward, terminated, truncated, _ = env.step(action)
                 
-        # Metric: Did we churn? (If steps < max_steps, likely churned)
-        churned = 1 if steps < env.max_steps else 0
-        term_reason = "Churn" if churned else "MaxSteps"
-        
-        results.append({
-            "scenario": name,
-            "reward": episode_reward,
-            "satisfaction": env.user_satisfaction,
-            "final_satisfaction": env.user_satisfaction,
-            "churned": churned, 
-            "term_reason": term_reason,
-            "steps": steps
-        })
-        
-    df = pd.DataFrame(results)
-    print(f"Avg Reward: {df['reward'].mean():.2f}")
-    print(f"Avg Satisfaction: {df['satisfaction'].mean():.2f}")
-    print(f"Churn Rate: {df['churned'].mean():.2f}")
-    return df
+                # Scalarize reward
+                episode_reward += np.dot(reward, weights)
+                state = next_state
+                steps += 1
+                
+                if terminated or truncated:
+                    break
+            
+            churned = 1 if steps < env.max_steps else 0
+            
+            results.append({
+                "Agent": agent_name,
+                "Scenario": sc_name,
+                "Reward": episode_reward,
+                "Satisfaction": env.user_satisfaction,
+                "Steps": steps,
+                "Churned": churned
+            })
+            
+    return results
 
 def evaluate():
     env = RealTimeRecEnv()
-    state_dim = 0
     action_dim = env.action_space.n
-    agent = SACAgent(state_dim, action_dim)
     
-    load_latest_actor(agent)
+    # Initialize Agents
+    sac_agent = SACAgent(0, action_dim)
+    load_latest_actor(sac_agent)
+    
+    random_agent = RandomAgent(action_dim)
+    static_agent = StaticAgent(action_dim, preferred_action=0) # Always recommend Action 0
+    
+    agents = {
+        "SAC (Ours)": sac_agent,
+        "Random": random_agent,
+        "Static (Act 0)": static_agent
+    }
     
     # Define Scenarios
-    # 1. Growth: High Engagement Value, Low Churn Penalty
-    #    Agent should be aggressive, maybe riskier.
     scenarios = [
-        ("Growth (High Eng)", [2.0, 0.5, 0.5]),
-        ("Safety (High Churn)", [0.5, 0.5, 5.0]),
-        ("Balanced", [1.0, 0.5, 2.0])
+        ("Balanced", [1.0, 0.5, 2.0]),
+        ("Growth", [2.0, 0.2, 0.5]),
+        ("Safety", [0.5, 0.8, 5.0])
     ]
     
-    all_results = []
-    for name, w in scenarios:
-        df = run_scenario(env, agent, w, name)
-        all_results.append(df)
+    print(f"Starting Benchmark on {len(scenarios)} scenarios with {len(agents)} agents...")
+    
+    all_data = []
+    for name, agent in agents.items():
+        data = run_agent_eval(env, agent, name, scenarios)
+        all_data.extend(data)
         
-    final_df = pd.concat(all_results)
-    final_df.to_csv("logs/evaluation_results_hybrid.csv", index=False)
-    print("\nSaved detailed results to logs/evaluation_results_hybrid.csv")
+    df = pd.DataFrame(all_data)
+    df.to_csv("logs/benchmark_results.csv", index=False)
+    print("Benchmark complete. Results saved to logs/benchmark_results.csv")
+    
+    # --- Visualization ---
+    print("Generating Benchmark Plot...")
+    plt.figure(figsize=(12, 6))
+    
+    # 1. Rewards
+    plt.subplot(1, 2, 1)
+    sns.barplot(data=df, x='Scenario', y='Reward', hue='Agent', palette='magma')
+    plt.title("Reward Comparison")
+    
+    # 2. Satisfaction
+    plt.subplot(1, 2, 2)
+    sns.barplot(data=df, x='Scenario', y='Satisfaction', hue='Agent', palette='magma')
+    plt.title("User Satisfaction Comparison")
+    
+    plt.tight_layout()
+    plt.savefig("logs/benchmark_summary.png")
+    print("Plot saved to logs/benchmark_summary.png")
+    
+    # Console Summary
+    summary = df.groupby(["Agent", "Scenario"])[["Reward", "Satisfaction", "Churned"]].mean()
+    print("\nBenchmark Summary:")
+    print(summary)
 
 if __name__ == "__main__":
     evaluate()
