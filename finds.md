@@ -17,32 +17,49 @@ The DOM-RL framework is composed of two hierarchical agents interacting with a c
 
 ```mermaid
 graph TD
-    subgraph "Generative Environment"
-        U(("User (Hidden State)")) -->|Signals (Clicks, Hover)| S[State Vector]
+
+    %% =========================
+    %% Generative Environment
+    %% =========================
+    subgraph Generative_Environment
+        U(("User Hidden State")) -->|Signals| S[State Vector]
         S -->|Observation| WA
         S -->|Observation| SA
     end
 
-    subgraph "Tier 1: Meta-Controller"
-        WA[Weight Agent] -- "Distributional RL" --> W[Objective Weights w]
+    %% =========================
+    %% Tier 1: Meta-Controller
+    %% =========================
+    subgraph Tier_1_Meta_Controller
+        WA[Weight Agent] -->|"Distributional RL"| W[Objective Weights w]
         style WA fill:#f9f,stroke:#333,stroke-width:2px
     end
 
-    subgraph "Tier 2: Policy Agent"
-        SA[SAC Agent] -- "Conservative Q-Learning" --> A[Action Index]
+    %% =========================
+    %% Tier 2: Policy Agent
+    %% =========================
+    subgraph Tier_2_Policy_Agent
+        SA[SAC Agent] -->|"Conservative Q-Learning"| A[Action Index]
         W -->|Conditions| SA
         style SA fill:#bbf,stroke:#333,stroke-width:2px
     end
 
-    subgraph "Slate Engine"
+    %% =========================
+    %% Slate Engine
+    %% =========================
+    subgraph Slate_Engine
         A -->|Maps to| SL{Slate Tuple}
-        SL -->|Items (i1, i2, i3)| U
+        SL -->|Items| U
     end
 
+    %% =========================
+    %% Rewards and Updates
+    %% =========================
     U -->|Feedback| R[Base Rewards]
-    W -->|Scalarization| FR[Final Reward]
+    R -->|Scalarization| FR[Final Reward]
     FR -->|Update| WA
     FR -->|Update| SA
+
 ```
 
 **Explanation:**
@@ -62,34 +79,45 @@ We have moved from a heuristic-based simulator to a **Generative Model** that mi
 
 ```mermaid
 stateDiagram-v2
-    [*] --> LatentUpdate : Agent presents Slate
-    
-    state "1. Latent Update (GRU)" as LatentUpdate {
-        Note: Update hidden mood state h_t based on history
+
+    [*] --> Latent_Update : Agent presents slate
+
+    state "1. Latent Update - GRU" as Latent_Update {
+        note right of Latent_Update
+            Update hidden mood state h_t
+            using interaction history
+        end note
     }
-    
-    LatentUpdate --> ChoiceModel
-    
-    state "2. Choice Model (MNL)" as ChoiceModel {
-        Note: Evaluate items in Slate
-        Note: Probabilistic Selection via Softmax
+
+    Latent_Update --> Choice_Model
+
+    state "2. Choice Model - MNL" as Choice_Model {
+        note right of Choice_Model
+            Evaluate items in slate
+            Probabilistic selection via softmax
+        end note
     }
-    
-    ChoiceModel --> Dynamics
-    
-    state "3. Satisfaction Dynamics (SDE)" as Dynamics {
-        Note: S_t moves towards Target Sat
-        Note: Applies Diffusion Noise (Mood Drift)
+
+    Choice_Model --> Dynamics
+
+    state "3. Satisfaction Dynamics - SDE" as Dynamics {
+        note right of Dynamics
+            S_t drifts toward target satisfaction
+            Applies diffusion noise
+        end note
     }
-    
+
     Dynamics --> Signals
-    
+
     state "4. Signal Generation" as Signals {
-        Note: Generate Click/Hover/Scroll
-        Note: Based on 'True Intent' Match
+        note right of Signals
+            Generate click, hover, scroll
+            Based on true intent match
+        end note
     }
-    
-    Signals --> [*] : Return Observation
+
+    Signals --> [*] : Return observation
+
 ```
 
 **Explanation:**
