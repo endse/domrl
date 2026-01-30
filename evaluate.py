@@ -140,11 +140,13 @@ def run_agent_eval(env, agent, agent_name, scenarios, episodes=20):
 def evaluate(args):
     dataset_path = args.dataset_path
     
-    env = RealTimeRecEnv()
+    print(f"Evaluation Device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")
+    
+    env = RealTimeRecEnv(slate_size=args.slate_size)
     action_dim = env.action_space.n
     
     # Initialize Agents
-    sac_agent = SACAgent(0, action_dim) # State dim 0 as placeholder
+    sac_agent = SACAgent(0, action_dim, hidden_dim=512) # State dim 0 as placeholder
     load_latest_actor(sac_agent)
     
     random_agent = RandomAgent(action_dim)
@@ -216,5 +218,6 @@ def evaluate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default=None, help="Path to MovieLens dataset for DR Eval")
+    parser.add_argument("--slate_size", type=int, default=3, help="Size of recommendation slate")
     args = parser.parse_args()
     evaluate(args)

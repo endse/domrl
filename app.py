@@ -59,7 +59,8 @@ def load_system():
     # --- SAC Agent ---
     sac_agent = SACAgent(
         state_dim=0, 
-        action_dim=env.action_space.n
+        action_dim=env.action_space.n,
+        hidden_dim=512
     )
     # Load Weights for SAC
     # Search for latest checkpoint or final

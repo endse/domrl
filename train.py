@@ -181,9 +181,9 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DOM-RL Training")
     parser.add_argument("--dataset_path", type=str, default=None, help="Path to MovieLens dataset for offline pre-training")
-    parser.add_argument("--max_episodes", type=int, default=50, help="Number of episodes to train")
+    parser.add_argument("--max_episodes", type=int, default=2000, help="Number of episodes to train")
     parser.add_argument("--max_steps", type=int, default=100, help="Max steps per episode")
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for updates")
+    parser.add_argument("--batch_size", type=int, default=256, help="Batch size for updates")
     parser.add_argument("--start_steps", type=int, default=5000, help="Steps for random exploration")
     parser.add_argument("--update_after", type=int, default=1000, help="Steps before starting updates")
     parser.add_argument("--cql_weight", type=float, default=0.0, help="Weight for CQL Loss")
@@ -191,4 +191,5 @@ if __name__ == "__main__":
     parser.add_argument("--slate_size", type=int, default=3, help="Size of recommendation slate")
     
     args = parser.parse_args()
+    print(f"Training Device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")
     train(args)

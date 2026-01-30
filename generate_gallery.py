@@ -15,8 +15,9 @@ def generate_gallery():
     
     print("Generating Feature Distributions...")
     # 1-8. Individual Attribute Distplots
-    cols = ['Enthusiasm', 'TimeOfDay', 'ScrollVel', 'Hover', 'ViewTime', 'w_Eng', 'w_Sat', 'w_Churn']
+    cols = ['Enthusiasm', 'TimeOfDay', 'ScrollVel', 'Hover', 'ViewTime', 'w_Eng', 'w_Sat', 'w_Div', 'w_Fair']
     for col in cols:
+        if col not in df.columns: continue
         plt.figure(figsize=(8, 5))
         sns.histplot(df[col], kde=True, color='skyblue')
         plt.title(f'Distribution of {col}')
@@ -66,42 +67,44 @@ def generate_gallery():
     # 16-35. Trace Analysis for 5 random episodes
     # Pick 5 long episodes
     ep_ids = df[df['Step'] > 20]['Episode'].unique()
-    selected_eps = np.random.choice(ep_ids, 5, replace=False)
-    
-    for i, ep in enumerate(selected_eps):
-        ep_data = df[df['Episode'] == ep]
+    if len(ep_ids) > 0:
+        selected_eps = np.random.choice(ep_ids, min(5, len(ep_ids)), replace=False)
         
-        # 4 plots per episode
-        fig, axs = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
-        fig.suptitle(f'Episode {ep} Trace (Scenario: {ep_data["Scenario"].iloc[0]})')
-        
-        axs[0].plot(ep_data['Step'], ep_data['Satisfaction'], color='green', marker='o')
-        axs[0].set_ylabel('Satisfaction')
-        
-        axs[1].plot(ep_data['Step'], ep_data['Reward'], color='blue', linestyle='--')
-        axs[1].set_ylabel('Reward')
-        
-        axs[2].bar(ep_data['Step'], ep_data['Action'], color='purple', alpha=0.5)
-        axs[2].set_ylabel('Action (Cat)')
-        
-        axs[3].plot(ep_data['Step'], ep_data['ScrollVel'], color='orange')
-        axs[3].set_ylabel('Scroll Velocity')
-        axs[3].set_xlabel('Step')
-        
-        plt.tight_layout()
-        plt.savefig(f'logs/gallery/trace_ep_{i+1}_{ep}.png')
-        plt.close()
+        for i, ep in enumerate(selected_eps):
+            ep_data = df[df['Episode'] == ep]
+            
+            # 4 plots per episode
+            fig, axs = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
+            fig.suptitle(f'Episode {ep} Trace (Scenario: {ep_data["Scenario"].iloc[0]})')
+            
+            axs[0].plot(ep_data['Step'], ep_data['Satisfaction'], color='green', marker='o')
+            axs[0].set_ylabel('Satisfaction')
+            
+            axs[1].plot(ep_data['Step'], ep_data['Reward'], color='blue', linestyle='--')
+            axs[1].set_ylabel('Reward')
+            
+            axs[2].bar(ep_data['Step'], ep_data['Action'], color='purple', alpha=0.5)
+            axs[2].set_ylabel('Action (Cat)')
+            
+            axs[3].plot(ep_data['Step'], ep_data['ScrollVel'], color='orange')
+            axs[3].set_ylabel('Scroll Velocity')
+            axs[3].set_xlabel('Step')
+            
+            plt.tight_layout()
+            plt.savefig(f'logs/gallery/trace_ep_{i+1}_{ep}.png')
+            plt.close()
 
     print("Generating Weight Analysis...")
     # 36. 3D Weight Scatter (Projected to 2D pairwise)
     plt.figure(figsize=(8, 8))
-    sns.scatterplot(data=df, x='w_Eng', y='w_Sat', hue='Scenario', size='w_Churn')
+    sns.scatterplot(data=df, x='w_Eng', y='w_Sat', hue='Scenario', size='w_Div')
     plt.title('Weight Distribution Landscape')
     plt.savefig('logs/gallery/weight_landscape.png')
     plt.close()
     
     # 37-39. Reward vs Weight Correlations
-    for w in ['w_Eng', 'w_Sat', 'w_Churn']:
+    for w in ['w_Eng', 'w_Sat', 'w_Div', 'w_Fair']:
+        if w not in df.columns: continue
         plt.figure(figsize=(8, 5))
         sns.lineplot(data=df, x=df[w].round(1), y='Reward')
         plt.title(f'Avg Reward vs {w}')

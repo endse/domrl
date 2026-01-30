@@ -61,10 +61,10 @@ streamlit run app.py
 ### 2. 🧠 Training the Brain
 Train the agent to adapt to the new "Boredom" dynamics.
 
-**High-Accuracy CPU Run:**
-Optimized for non-GPU environments (Batch Size 256, 2000 Episodes).
+**High-Accuracy Run (Default):**
+Optimized for performance (Batch Size 256, 2000 Episodes).
 ```powershell
-python train.py --max_episodes 2000 --slate_size 3 --batch_size 256
+python train.py
 ```
 
 **Hybrid Run (Offline + Online):**

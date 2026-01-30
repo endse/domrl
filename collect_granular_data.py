@@ -25,13 +25,13 @@ def collect_data(episodes=100):
     env = RealTimeRecEnv()
     state_dim = 0 # Dict compatibility
     action_dim = env.action_space.n
-    agent = SACAgent(state_dim, action_dim)
+    agent = SACAgent(state_dim, action_dim, hidden_dim=512)
     
     load_latest_actor(agent)
     
     data = []
     
-    print(f"Collecting data from {episodes} episodes...")
+    print(f"Collecting data from {episodes} episodes on {agent.device}...")
     
     for ep in range(episodes):
         state, _ = env.reset()
@@ -40,13 +40,14 @@ def collect_data(episodes=100):
         # Scenario Labeling
         # user_features: [Enthusiasm, Time]
         # micro_signals: [Scroll, Hover, View]
-        # weights: [w_eng, w_sat, w_div]
+        # weights: [w_eng, w_sat, w_div, w_fair]
         
         weights = state['weights']
-        w_eng, w_sat, w_div = weights
+        w_eng, w_sat, w_div, w_fair = weights
         scenario = "Balanced"
-        if w_div > 2.0: scenario = "Safety" # Renamed Churn -> Diversity/Div in Env
+        if w_div > 2.0: scenario = "Safety" 
         if w_eng > 1.2 and w_div < 1.0: scenario = "Growth"
+        if w_fair > 2.0: scenario = "Fairness"
         
         while True:
             # For visualization, we might want deterministic or sampled actions
@@ -64,7 +65,8 @@ def collect_data(episodes=100):
                 "ViewTime": state['micro_signals'][2],
                 "w_Eng": w_eng,
                 "w_Sat": w_sat,
-                "w_Churn": w_div,
+                "w_Div": w_div,
+                "w_Fair": w_fair,
                 "Scenario": scenario,
                 "Action": action
             }
@@ -72,8 +74,8 @@ def collect_data(episodes=100):
             next_state, reward, terminated, truncated, _ = env.step(action)
             
             # Log Data AFTER step (Reward R, Sat S')
-            # Reward is a vector [r_eng, r_sat, r_div], we must scalarize it for the CSV to be valid numbers
-            scalar_reward = np.dot(reward, [w_eng, w_sat, w_div])
+            # Reward is a vector [r_eng, r_sat, r_div, r_fair]
+            scalar_reward = np.dot(reward, [w_eng, w_sat, w_div, w_fair])
             obs_entry["Reward"] = scalar_reward
             obs_entry["Satisfaction"] = env.user_satisfaction
             obs_entry["Done"] = terminated or truncated
