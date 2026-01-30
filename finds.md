@@ -13,20 +13,21 @@ Before diving into the data, here is the high-level architecture of the system.
 ```mermaid
 graph TD
     subgraph Environment
-        U[User Simulator] -->|Clicks, Hover, Scroll| S[State Vector]
-        W[Business Logic] -->|"Dynamic Weights (w1, w2, w3)"| S
+        U[User Simulator] -->|Clicks / Hover / Scroll| S[State Vector]
+        W[Business Logic] -->|Dynamic Weights w1 w2 w3| S
         U -->|Feedback| R[Base Rewards]
         W -->|Weighting| RF[Final Reward Calculation]
     end
 
     subgraph Agent
-        S -->|Input (State + Weights)| AN[Actor Network]
-        AN -->|Action Probabilities| A[Action: Recommend Category]
+        S -->|Input: State + Weights| AN[Actor Network]
+        AN -->|Action Probabilities| A[Recommend Category]
         S -->|Input| CN[Critic Network]
         RF -->|Scalar Reward| CN
     end
 
     A -->|Show Content| U
+
 ```
 
 ---
