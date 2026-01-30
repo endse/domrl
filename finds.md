@@ -82,41 +82,38 @@ stateDiagram-v2
 
     [*] --> Latent_Update : Agent presents slate
 
-    state "1. Latent Update - GRU" as Latent_Update {
-        note right of Latent_Update
-            Update hidden mood state h_t
-            using interaction history
-        end note
-    }
+    state "1. Latent Update - GRU" as Latent_Update
+    note right of Latent_Update
+        Update hidden mood state h_t
+        using interaction history
+    end note
 
     Latent_Update --> Choice_Model
 
-    state "2. Choice Model - MNL" as Choice_Model {
-        note right of Choice_Model
-            Evaluate items in slate
-            Probabilistic selection via softmax
-        end note
-    }
+    state "2. Choice Model - MNL" as Choice_Model
+    note right of Choice_Model
+        Evaluate items in slate
+        Probabilistic selection via softmax
+    end note
 
     Choice_Model --> Dynamics
 
-    state "3. Satisfaction Dynamics - SDE" as Dynamics {
-        note right of Dynamics
-            S_t drifts toward target satisfaction
-            Applies diffusion noise
-        end note
-    }
+    state "3. Satisfaction Dynamics - SDE" as Dynamics
+    note right of Dynamics
+        S_t drifts toward target satisfaction
+        Applies diffusion noise
+    end note
 
     Dynamics --> Signals
 
-    state "4. Signal Generation" as Signals {
-        note right of Signals
-            Generate click, hover, scroll
-            Based on true intent match
-        end note
-    }
+    state "4. Signal Generation" as Signals
+    note right of Signals
+        Generate click, hover, scroll
+        Based on true intent match
+    end note
 
     Signals --> [*] : Return observation
+
 
 ```
 
