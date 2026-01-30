@@ -5,7 +5,7 @@ import numpy as np
 from domrl.models.networks import Actor, Critic
 
 class SACAgent:
-    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True):
+    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, cql_weight=0.0, bc_weight=0.0):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.gamma = gamma
@@ -13,6 +13,8 @@ class SACAgent:
         self.alpha = alpha
         self.auto_alpha = auto_alpha
         self.target_entropy = -np.log(1.0 / action_dim) * 0.98
+        self.cql_weight = cql_weight
+        self.bc_weight = bc_weight
 
         self.actor = Actor(state_dim, action_dim).to(self.device)
         self.critic = Critic(state_dim, action_dim).to(self.device)
@@ -31,9 +33,14 @@ class SACAgent:
         state_tensor = {}
         for k, v in state.items():
             if k == 'history' or k == 'persona_id':
-                state_tensor[k] = torch.as_tensor(v, device=self.device, dtype=torch.long).unsqueeze(0)
+                t = torch.as_tensor(v, device=self.device, dtype=torch.long)
+                if t.dim() == 0: t = t.unsqueeze(0)
+                if t.dim() == 1 and k=='history': t = t.unsqueeze(0)
+                state_tensor[k] = t
             else:
-                state_tensor[k] = torch.as_tensor(v, device=self.device, dtype=torch.float32).unsqueeze(0)
+                t = torch.as_tensor(v, device=self.device, dtype=torch.float32)
+                if t.dim() == 1: t = t.unsqueeze(0)
+                state_tensor[k] = t
                 
         with torch.no_grad():
             if evaluate:
@@ -64,11 +71,20 @@ class SACAgent:
             target_q = reward + not_done * self.gamma * v_next
         
         # Current Q estimates
-        q1, q2 = self.critic(state)
-        q1 = q1.gather(1, action.view(-1, 1))
-        q2 = q2.gather(1, action.view(-1, 1))
+        q1, q2 = self.critic(state) # (B, ActionDim)
         
-        critic_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
+        # Standard SAC Loss
+        q1_taken = q1.gather(1, action.view(-1, 1))
+        q2_taken = q2.gather(1, action.view(-1, 1))
+        sac_loss = F.mse_loss(q1_taken, target_q) + F.mse_loss(q2_taken, target_q)
+        
+        # CQL Loss: log(sum(exp(Q))) - Q(s, a)
+        if self.cql_weight > 0:
+            cql_loss1 = torch.logsumexp(q1, dim=1).mean() - q1_taken.mean()
+            cql_loss2 = torch.logsumexp(q2, dim=1).mean() - q2_taken.mean()
+            critic_loss = sac_loss + self.cql_weight * (cql_loss1 + cql_loss2)
+        else:
+            critic_loss = sac_loss
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -83,7 +99,21 @@ class SACAgent:
         
         # Objective: Maximize E[Q - alpha * log_pi]
         # Loss: Minimize -sum(probs * (Q - alpha * log_probs))
-        actor_loss = torch.sum(probs * (self.alpha * log_probs - q_pi), dim=1).mean()
+        sac_actor_loss = torch.sum(probs * (self.alpha * log_probs - q_pi), dim=1).mean()
+        
+        # Behavior Cloning Loss (Supervised)
+        # Maximize log_prob(action_taken)
+        # Minimize -log_prob(action_taken)
+        if self.bc_weight > 0:
+            # We need log_probs of the *taken* action, not sampled
+            # probs: (B, A)
+            dist = torch.distributions.Categorical(probs)
+            log_prob_taken = dist.log_prob(action.view(-1))
+            bc_loss = -log_prob_taken.mean()
+            
+            actor_loss = sac_actor_loss + self.bc_weight * bc_loss
+        else:
+            actor_loss = sac_actor_loss
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

@@ -16,8 +16,8 @@ class StateEncoder(nn.Module):
         self.persona_embedding = nn.Embedding(num_embeddings=4, embedding_dim=4)
         
         # Combined Feature Dimension
-        # GRU_Out(32) + User(2) + Micro(3) + Weights(3) + Persona(4) = 44
-        self.fc = nn.Linear(32 + 2 + 3 + 3 + 4, hidden_dim)
+        # GRU_Out(32) + User(2) + Micro(3) + Weights(4) + Persona(4) = 45
+        self.fc = nn.Linear(32 + 2 + 3 + 4 + 4, hidden_dim)
         
     def forward(self, state_dict):
         # 1. History -> GRU

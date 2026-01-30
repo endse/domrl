@@ -26,15 +26,15 @@ def train(args):
     print(f"Configuration: {args}")
 
     # Create Environment
-    env = RealTimeRecEnv()
+    env = RealTimeRecEnv(slate_size=args.slate_size)
     
     # State dim is strictly for compat, internal networks use dict
     state_dim = 0 
     action_dim = env.action_space.n
     
     # Initialize Agents
-    agent = SACAgent(state_dim, action_dim)
-    weight_agent = WeightAgent(action_dim=action_dim)
+    agent = SACAgent(state_dim, action_dim, cql_weight=args.cql_weight, bc_weight=args.bc_weight)
+    weight_agent = WeightAgent(action_dim=action_dim, hidden_dim=64)
     
     # Initialize Buffer
     replay_buffer = ReplayBuffer(state_dim, 1) # Action dim 1 for discrete indices
@@ -147,6 +147,7 @@ def train(args):
         writer.add_scalar("Weight/Engagement", weights[0], episode)
         writer.add_scalar("Weight/Satisfaction", weights[1], episode)
         writer.add_scalar("Weight/Diversity", weights[2], episode)
+        writer.add_scalar("Weight/Fairness", weights[3], episode)
 
         # CSV Log Data
         training_data.append({
@@ -159,7 +160,8 @@ def train(args):
             "critic_loss": avg_critic_loss,
             "w_eng": weights[0],
             "w_sat": weights[1],
-            "w_div": weights[2]
+            "w_div": weights[2],
+            "w_fair": weights[3]
         })
         
         if (episode+1) % 50 == 0:
@@ -180,6 +182,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size for updates")
     parser.add_argument("--start_steps", type=int, default=5000, help="Steps for random exploration")
     parser.add_argument("--update_after", type=int, default=1000, help="Steps before starting updates")
+    parser.add_argument("--cql_weight", type=float, default=0.0, help="Weight for CQL Loss")
+    parser.add_argument("--bc_weight", type=float, default=0.0, help="Weight for Behavior Cloning Loss")
+    parser.add_argument("--slate_size", type=int, default=3, help="Size of recommendation slate")
     
     args = parser.parse_args()
     train(args)

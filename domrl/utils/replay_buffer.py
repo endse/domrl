@@ -12,14 +12,14 @@ class ReplayBuffer:
         self.history = np.zeros((max_size, 10), dtype=np.int32)
         self.user_features = np.zeros((max_size, 2), dtype=np.float32)
         self.micro_signals = np.zeros((max_size, 3), dtype=np.float32)
-        self.weights = np.zeros((max_size, 3), dtype=np.float32)
+        self.weights = np.zeros((max_size, 4), dtype=np.float32)
         self.persona_id = np.zeros((max_size, 1), dtype=np.int32)
         
         # Storage for Next State
         self.next_history = np.zeros((max_size, 10), dtype=np.int32)
         self.next_user_features = np.zeros((max_size, 2), dtype=np.float32)
         self.next_micro_signals = np.zeros((max_size, 3), dtype=np.float32)
-        self.next_weights = np.zeros((max_size, 3), dtype=np.float32)
+        self.next_weights = np.zeros((max_size, 4), dtype=np.float32)
         self.next_persona_id = np.zeros((max_size, 1), dtype=np.int32)
 
         self.action = np.zeros((max_size, 1), dtype=np.int32) # Discrete action index

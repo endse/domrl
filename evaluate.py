@@ -6,9 +6,12 @@ import os
 import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
+import argparse
 from domrl.env.rec_env import RealTimeRecEnv
 from domrl.agent.sac import SACAgent
 from domrl.agent.baselines import RandomAgent, StaticAgent
+from domrl.utils.data_loader import load_movielens_data
+from torch.distributions import Categorical
 
 def load_latest_actor(agent, log_dir="logs"):
     files = glob.glob(f'{log_dir}/actor_*.pth')
@@ -25,6 +28,77 @@ def load_latest_actor(agent, log_dir="logs"):
     latest = max(files, key=os.path.getctime)
     print(f"Loading checkpoint: {latest}")
     agent.actor.load_state_dict(torch.load(latest))
+
+class DoublyRobustEvaluator:
+    def __init__(self, dataset_path, action_dim=10):
+        self.dataset_path = dataset_path
+        self.action_dim = action_dim
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Load Data
+        self.transitions = load_movielens_data(dataset_path, max_rows=50000)
+        
+        # Estimate Behavior Policy (Marginal Counts)
+        # pi_b(a|s) approx P(a) (Naïve) or Conditional via Histogram/NN
+        # For simplicity, we use marginal probabilities (Action Popularity)
+        print("Estimating Behavior Policy...")
+        counts = np.zeros(action_dim)
+        for t in self.transitions:
+            _, action, _, _, _ = t
+            counts[action] += 1
+        probs = counts / counts.sum()
+        self.behavior_probs = torch.FloatTensor(probs).to(self.device)
+        print(f"Behavior Policy (Marginal): {probs}")
+        
+    def evaluate(self, agent):
+        """
+        Compute Doubly Robust Estimate:
+        DR = V_model + rho * (r - Q(s,a_obs))
+        """
+        
+        total_dr_value = 0
+        count = 0
+        
+        for t in self.transitions:
+            state, action, next_state, reward, done = t
+            
+            # 1. Get Agent Action Probs pi(a|s)
+            state_tensor = {}
+            for k, v in state.items():
+                if k == 'history' or k == 'persona_id':
+                     t_v = torch.as_tensor(v, device=self.device, dtype=torch.long)
+                     if t_v.dim() == 0: t_v = t_v.unsqueeze(0)
+                     if t_v.dim() == 1 and k=='history': t_v = t_v.unsqueeze(0)
+                     state_tensor[k] = t_v
+                else:
+                    t_v = torch.as_tensor(v, device=self.device, dtype=torch.float32)
+                    if t_v.dim() == 1: t_v = t_v.unsqueeze(0)
+                    state_tensor[k] = t_v
+            
+            with torch.no_grad():
+                 _, probs, _ = agent.actor.sample(state_tensor) # (1, A)
+                 q1, q2 = agent.critic(state_tensor)
+                 q = torch.min(q1, q2) # (1, A)
+                 
+            pi_a = probs[0, action].item()
+            pi_b = self.behavior_probs[action].item() + 1e-6
+            
+            rho = pi_a / pi_b
+            rho = min(rho, 10.0) # Clipping
+            
+            # Model Value V(s) = sum(pi(a'|s) * Q(s, a'))
+            v_model = torch.sum(probs * q, dim=1).item()
+            
+            # Q(s, a_observed)
+            q_obs = q[0, action].item()
+            
+            # DR = V_model + rho * (r - Q_obs)
+            dr_est = v_model + rho * (reward - q_obs)
+            
+            total_dr_value += dr_est
+            count += 1
+            
+        return total_dr_value / count
 
 def run_agent_eval(env, agent, agent_name, scenarios, episodes=20):
     results = []
@@ -63,12 +137,14 @@ def run_agent_eval(env, agent, agent_name, scenarios, episodes=20):
             
     return results
 
-def evaluate():
+def evaluate(args):
+    dataset_path = args.dataset_path
+    
     env = RealTimeRecEnv()
     action_dim = env.action_space.n
     
     # Initialize Agents
-    sac_agent = SACAgent(0, action_dim)
+    sac_agent = SACAgent(0, action_dim) # State dim 0 as placeholder
     load_latest_actor(sac_agent)
     
     random_agent = RandomAgent(action_dim)
@@ -80,14 +156,30 @@ def evaluate():
         "Static (Act 0)": static_agent
     }
     
+    # --- Offline Doubly Robust Evaluation ---
+    if dataset_path and os.path.exists(dataset_path):
+        print("\n--- Starting Doubly Robust Evaluation (Offline) ---")
+        dr_evaluator = DoublyRobustEvaluator(dataset_path, action_dim)
+        dr_results = []
+        for name, agent in agents.items():
+            if name == "SAC (Ours)":
+                score = dr_evaluator.evaluate(agent)
+                print(f"Agent: {name}, DR Score: {score:.4f}")
+                dr_results.append({"Agent": name, "DR_Score": score})
+        
+        pd.DataFrame(dr_results).to_csv("logs/dr_results.csv", index=False)
+        print("DR Results saved to logs/dr_results.csv")
+    
+    # --- Online Simulation Evaluation ---
     # Define Scenarios
     scenarios = [
-        ("Balanced", [1.0, 0.5, 2.0]),
-        ("Growth", [2.0, 0.2, 0.5]),
-        ("Safety", [0.5, 0.8, 5.0])
+        ("Balanced", [1.0, 0.5, 2.0, 1.0]),
+        ("Growth", [2.0, 0.2, 0.5, 0.0]),
+        ("Safety", [0.5, 0.8, 5.0, 0.0]),
+        ("Fairness", [0.5, 0.5, 1.0, 5.0])
     ]
     
-    print(f"Starting Benchmark on {len(scenarios)} scenarios with {len(agents)} agents...")
+    print(f"\n--- Starting Online Benchmark on {len(scenarios)} scenarios ---")
     
     all_data = []
     for name, agent in agents.items():
@@ -122,4 +214,7 @@ def evaluate():
     print(summary)
 
 if __name__ == "__main__":
-    evaluate()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset_path", type=str, default=None, help="Path to MovieLens dataset for DR Eval")
+    args = parser.parse_args()
+    evaluate(args)

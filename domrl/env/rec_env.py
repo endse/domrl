@@ -1,40 +1,46 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+from domrl.env.user_simulator import GenerativeUserSimulator
+from domrl.utils.slate_utils import SlateMapper
 
 class RealTimeRecEnv(gym.Env):
     """
-    DOM-RL Environment (MOMDP) with User Personas.
+    DOM-RL Environment (MOMDP) with User Personas and Slate Recommendations.
     State: 
         - History: Sequence of last N items interacted with.
-        - UserFeatures: [Enthusiasm, Time].
-        - MicroSignals: [ScrollVelocity, HoverDuration, ViewTime].
-        - Weights: [w_eng, w_sat, w_div].
-        - Persona: One-hot or ID of the user persona.
-    Action: Discrete item category (0-9).
-    Reward: Vector or Composite.
+        - ...
+    Action: Discrete index mapping to a Slate of items.
     """
     metadata = {'render_modes': ['human']}
 
-    def __init__(self):
+    def __init__(self, slate_size=3):
         super(RealTimeRecEnv, self).__init__()
         
         self.history_len = 10
         self.num_categories = 10
+        self.slate_size = slate_size
         
         self.personas = ["Standard", "Binger", "Browser", "Critic"]
         self.num_personas = len(self.personas)
         
+        # Slate Mapper
+        self.slate_mapper = SlateMapper(num_items=self.num_categories, slate_size=slate_size, allow_repeats=True)
+        self.num_actions = self.slate_mapper.num_actions
+        
+        # Simulator
+        self.simulator = GenerativeUserSimulator(num_categories=self.num_categories)
+        
         # Observation Space as Dict
         self.observation_space = spaces.Dict({
             "history": spaces.Box(0, self.num_categories, shape=(self.history_len,), dtype=np.int32),
-            "user_features": spaces.Box(0, 24, shape=(2,), dtype=np.float32), # [Enthusiasm, Time]
-            "micro_signals": spaces.Box(-10, 60, shape=(3,), dtype=np.float32), # [Scroll, Hover, View]
-            "weights": spaces.Box(0, 5, shape=(3,), dtype=np.float32), # [w1, w2, w3]
-            "persona_id": spaces.Discrete(self.num_personas) # [0, 1, 2, 3]
+            "user_features": spaces.Box(0, 24, shape=(2,), dtype=np.float32), 
+            "micro_signals": spaces.Box(-10, 60, shape=(3,), dtype=np.float32), 
+            "weights": spaces.Box(0, 5, shape=(4,), dtype=np.float32), 
+            "persona_id": spaces.Discrete(self.num_personas) 
         })
 
-        self.action_space = spaces.Discrete(self.num_categories)
+        self.action_space = spaces.Discrete(self.num_actions)
         self.max_steps = 100
         
         # Internal State
@@ -43,18 +49,11 @@ class RealTimeRecEnv(gym.Env):
         self.history = np.zeros(self.history_len, dtype=np.int32)
         self.current_persona_id = 0
         
-    def _get_obs(self) -> dict:
-        """
-        Returns the current observation dictionary.
+        # Fairness Tracking
+        self.action_counts = np.ones(self.num_categories) 
+        self.persona_satisfaction = {p: 0.5 for p in range(self.num_personas)} 
         
-        Returns:
-            dict: Dictionary containing:
-                - 'history': np.ndarray (int32) of shape (10,)
-                - 'user_features': np.ndarray (float32) of shape (2,)
-                - 'micro_signals': np.ndarray (float32) of shape (3,)
-                - 'weights': np.ndarray (float32) of shape (3,)
-                - 'persona_id': int
-        """
+    def _get_obs(self) -> dict:
         return {
             "history": self.history.copy(),
             "user_features": self.user_state.astype(np.float32),
@@ -64,18 +63,6 @@ class RealTimeRecEnv(gym.Env):
         }
 
     def reset(self, seed: int = None, options: dict = None) -> tuple[dict, dict]:
-        """
-        Resets the environment to an initial state.
-        
-        Args:
-            seed (int, optional): Random seed.
-            options (dict, optional): Configuration dictionary. 
-                - 'weights': list[float] (Overwrites random weights)
-                - 'persona_id': int (Forces a specific persona)
-        
-        Returns:
-            tuple[dict, dict]: Observation and info dictionary.
-        """
         super().reset(seed=seed)
         self.current_step = 0
         self.history = np.zeros(self.history_len, dtype=np.int32)
@@ -87,7 +74,8 @@ class RealTimeRecEnv(gym.Env):
             self.weights = np.array([
                 np.random.uniform(0.5, 1.5),  # Engagement
                 np.random.uniform(0.1, 1.0),  # Satisfaction
-                np.random.uniform(1.0, 3.0)   # Diversity/Churn
+                np.random.uniform(1.0, 3.0),  # Diversity
+                np.random.uniform(0.5, 2.0)   # Fairness
             ], dtype=np.float32)
             
         # Select Persona
@@ -96,105 +84,90 @@ class RealTimeRecEnv(gym.Env):
         else:
             self.current_persona_id = np.random.randint(0, self.num_personas)
             
+        # Reset Simulator with current Persona
+        self.simulator.reset_state(persona_id=self.current_persona_id)
+        self.user_satisfaction = self.simulator.current_satisfaction
+            
         # Initial User State (Persona-dependent)
         base_enthusiasm = np.random.rand()
-        if self.current_persona_id == 1: # Binger
-            base_enthusiasm += 0.3
-            self.user_satisfaction = 0.7
-        else:
-            self.user_satisfaction = 0.5
-            
         self.user_state = np.array([
             min(1.0, base_enthusiasm),
             np.random.rand() * 24   # Time
         ], dtype=np.float32)
         
-        self.micro_signals = np.array([0.0, 0.0, 0.0], dtype=np.float32) # Scroll, Hover, View
+        self.micro_signals = np.array([0.0, 0.0, 0.0], dtype=np.float32) 
         
         return self._get_obs(), {}
 
     def step(self, action: int) -> tuple[dict, np.ndarray, bool, bool, dict]:
         """
-        Executes one time step within the environment.
-        
-        Args:
-            action (int): The category ID of the recommended item.
-            
-        Returns:
-            tuple:
-                - observation (dict): Next state.
-                - reward (np.ndarray): Multi-objective reward vector [Eng, Sat, Div].
-                - terminated (bool): Whether the episode ended (Churn).
-                - truncated (bool): Whether the episode timed out (MaxSteps).
-                - info (dict): Diagnostic info.
+        Executes one time step. Action is Slate Index.
         """
         self.current_step += 1
         
-        # Update History (Shift left, append new)
+        # 1. Map Action Index to Slate Tuple
+        slate = self.slate_mapper.get_slate(action) # e.g. (1, 5, 5)
+        
+        # 2. Simulator Step with Slate
+        sat, signals = self.simulator.step(slate)
+        self.user_satisfaction = sat
+        
+        chosen_item = signals.get('chosen_item', slate[0])
+        
+        # 3. Update History with CHOSEN item
         self.history = np.roll(self.history, -1)
-        self.history[-1] = action
+        self.history[-1] = chosen_item
         
-        # --- Using Persona Logic ---
-        persona = self.personas[self.current_persona_id]
-        
-        # User Preference Logic
-        preferred_category = int(self.user_state[1]) % self.num_categories
-        is_match = (action == preferred_category)
-        
-        decay = 0.05
-        boost = 0.1
-        
-        # Persona Modifiers
-        if persona == "Binger":
-            decay = 0.02 # More tolerant
-            boost = 0.15 # Easily satisfied
-        elif persona == "Critic":
-            decay = 0.1  # Harsh penalty
-            boost = 0.05 # Hard to please
-            # Critic only likes it if visualization is perfect (simulated by extra random check)
-            if is_match and np.random.rand() < 0.3:
-                is_match = False # Nitpicking
-                
-        if is_match:
-            self.user_satisfaction = min(1.0, self.user_satisfaction + boost)
-            hover = np.random.normal(2.0, 0.5)
-            scroll = 0.5
-            click = 1
-        else:
-            self.user_satisfaction = max(0.0, self.user_satisfaction - decay)
-            hover = 0.1
-            scroll = 5.0
-            click = 0
-            
-        # Browser persona scrolls faster
-        if persona == "Browser":
-            scroll += 3.0
-            hover *= 0.5
-            
-        view_time = hover + (0.5 if click else 0.0)
+        # Parse Signals
+        scroll = signals['scroll']
+        hover = signals['hover']
+        view_time = signals['view_time']
+        click = signals['click']
         
         # Update Micro-signals
         self.micro_signals = np.array([scroll, hover, view_time], dtype=np.float32)
         
+        # --- Update Fairness Stats ---
+        self.action_counts[chosen_item] += 1
+        
+        alpha = 0.1
+        self.persona_satisfaction[self.current_persona_id] = (1 - alpha) * self.persona_satisfaction[self.current_persona_id] + alpha * sat
+        
         # --- Reward Calculation ---
-        w_eng, w_sat, w_div = self.weights
+        if len(self.weights) < 4:
+            self.weights = np.pad(self.weights, (0, 4 - len(self.weights)), mode='constant', constant_values=1.0)
+            
+        w_eng, w_sat, w_div, w_fair = self.weights
         
         r_engage = click * 1.0
         r_satisfaction = self.user_satisfaction
         
-        # Diversity placeholder (Compare action to recent history)
-        # Simple diversity: 1 if action not in last 3 items, else 0
-        recent = self.history[-4:-1] # excluding current which is at -1
-        r_diversity = 1.0 if action not in recent else 0.0
+        # Diversity / Submodularity Reward on Slate
+        # Penalize if slate contains duplicates (redundancy)
+        unique_items = len(set(slate))
+        redundancy_penalty = (len(slate) - unique_items) * 0.5 
+        r_diversity = (unique_items / len(slate)) - redundancy_penalty
         
-        # Muti-Objective Reward Vector
-        # [Engagement, Satisfaction, Diversity]
+        # Fairness Reward Calculation on Chosen Item
+        total_counts = self.action_counts.sum()
+        prob = self.action_counts[chosen_item] / total_counts
+        r_exposure = 0.5 / prob if prob > 0 else 1.0 
+        r_exposure = min(r_exposure, 5.0) 
+        
+        global_avg_sat = np.mean(list(self.persona_satisfaction.values()))
+        persona_avg_sat = self.persona_satisfaction[self.current_persona_id]
+        
+        r_demo = 0.0
+        if persona_avg_sat < global_avg_sat - 0.1: 
+            r_demo = 1.0 
+            
+        r_fairness = 0.5 * r_exposure + 0.5 * r_demo
         
         # Churn Logic
         terminated = False
         truncated = False
         
-        # Churn threshold depends on persona?
+        persona = self.personas[self.current_persona_id]
         churn_thresh = 0.2
         if persona == "Binger": churn_thresh = 0.1
         if persona == "Critic": churn_thresh = 0.3
@@ -202,11 +175,11 @@ class RealTimeRecEnv(gym.Env):
         if self.user_satisfaction < churn_thresh:
             if np.random.rand() < 0.3:
                 terminated = True
-                r_satisfaction -= 10.0 # Heavy penalty for churn
+                r_satisfaction -= 10.0 
         
         if self.current_step >= self.max_steps:
              terminated = True
              
-        reward_vector = np.array([r_engage, r_satisfaction, r_diversity], dtype=np.float32)
+        reward_vector = np.array([r_engage, r_satisfaction, r_diversity, r_fairness], dtype=np.float32)
              
         return self._get_obs(), reward_vector, terminated, truncated, {}

@@ -83,7 +83,8 @@ def load_movielens_data(dataset_path, history_len=10, max_rows=100000):
                 "history": np.array(history, dtype=np.int32),
                 "user_features": np.array([0.5, 0.0], dtype=np.float32), 
                 "micro_signals": np.array([0.0, 0.0, 0.0], dtype=np.float32),
-                "weights": np.array([1.0, 1.0, 1.0], dtype=np.float32) # Default weights
+                "weights": np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32), # Default weights (Eng, Sat, Div, Fair)
+                "persona_id": np.array([0], dtype=np.int32)
             }
             
             # Reward: Normalize 0.5-5.0 to 0.0-1.0
@@ -98,7 +99,8 @@ def load_movielens_data(dataset_path, history_len=10, max_rows=100000):
                 "history": np.array(next_history, dtype=np.int32),
                 "user_features": np.array([0.5, 0.0], dtype=np.float32), 
                 "micro_signals": np.array([0.0, 0.0, 0.0], dtype=np.float32),
-                "weights": np.array([1.0, 1.0, 1.0], dtype=np.float32)
+                "weights": np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+                "persona_id": np.array([0], dtype=np.int32)
             }
             
             done = False
