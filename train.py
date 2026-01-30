@@ -32,9 +32,9 @@ def train(args):
     state_dim = 0 
     action_dim = env.action_space.n
     
-    # Initialize Agents
-    agent = SACAgent(state_dim, action_dim, cql_weight=args.cql_weight, bc_weight=args.bc_weight)
-    weight_agent = WeightAgent(action_dim=action_dim, hidden_dim=64)
+    # Initialize Agents (Bigger Capacity for High Accuracy)
+    agent = SACAgent(state_dim, action_dim, hidden_dim=512, cql_weight=args.cql_weight, bc_weight=args.bc_weight)
+    weight_agent = WeightAgent(action_dim=action_dim, hidden_dim=128)
     
     # Initialize Buffer
     replay_buffer = ReplayBuffer(state_dim, 1) # Action dim 1 for discrete indices
@@ -71,13 +71,15 @@ def train(args):
             print("Proceeding without offline training.")
     else:
         print("Dataset path not provided or not found. Skipping offline training.")
-    
+            
     # --- Online Training Loop ---
     start_steps = args.start_steps if total_steps == 0 else 0
+    hit_rates = [] # Track accuracy
     
     for episode in range(args.max_episodes):
         state, _ = env.reset()
         episode_reward = 0
+        episode_hits = 0 # Count successful recommendations
         episode_q_vals = []
         episode_actor_loss = []
         episode_critic_loss = []
@@ -86,10 +88,11 @@ def train(args):
         for step in range(args.max_steps):
             step_count += 1
             
+            # ... (Agents Decision) ...
             # 1. Weight Agent Decision
             weights = weight_agent.select_weights(state)
-            env.weights = weights # Update Environment
-            state['weights'] = weights # Update Observation
+            env.weights = weights 
+            state['weights'] = weights 
             
             # 2. SAC Agent Decision
             if total_steps < start_steps:
@@ -101,6 +104,11 @@ def train(args):
             next_state, reward_vec, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
+            # Track Accuracy (Hit: Did the user click? i.e., Engagement Reward > 0)
+            if reward_vec[0] > 0.1: 
+                episode_hits += 1
+            
+            # ... (Rest of loop) ...
             # 4. Scalarize Reward
             scalar_reward = np.dot(reward_vec, weights)
             meta_reward = reward_vec[1] # Satisfaction as Meta-Reward
@@ -126,7 +134,6 @@ def train(args):
                     writer.add_scalar("Loss/Actor", actor_loss, total_steps)
                     writer.add_scalar("Loss/Critic", critic_loss, total_steps)
                     writer.add_scalar("Loss/WeightCritic", w_critic_loss, total_steps)
-                    writer.add_scalar("Loss/WeightActor", w_actor_loss, total_steps)
             
             if done:
                 break
@@ -137,31 +144,28 @@ def train(args):
         avg_critic_loss = np.mean(episode_critic_loss) if episode_critic_loss else 0
         final_satisfaction = env.user_satisfaction
         
-        # Console Log
-        print(f"Episode: {episode+1}/{args.max_episodes}, Reward: {episode_reward:.2f}, AvgQ: {avg_q:.2f}, Sat: {final_satisfaction:.2f}, W: {weights.round(2)}")
+        # Calculate Hit Rate (Accuracy)
+        ep_hit_rate = episode_hits / step_count
+        hit_rates.append(ep_hit_rate)
+        avg_hit_rate = np.mean(hit_rates[-100:]) # Rolling average
+        
+        # Console Log with ACCURACY
+        print(f"Episode: {episode+1}/{args.max_episodes}, Reward: {episode_reward:.2f}, Sat: {final_satisfaction:.2f}, Accuracy (HitRate): {ep_hit_rate*100:.1f}%")
         
         # TensorBoard Log
         writer.add_scalar("Reward/Episode", episode_reward, episode)
-        writer.add_scalar("Value/AvgQ", avg_q, episode)
+        writer.add_scalar("Performance/Accuracy", ep_hit_rate, episode)
         writer.add_scalar("Env/Satisfaction", final_satisfaction, episode)
-        writer.add_scalar("Weight/Engagement", weights[0], episode)
-        writer.add_scalar("Weight/Satisfaction", weights[1], episode)
-        writer.add_scalar("Weight/Diversity", weights[2], episode)
-        writer.add_scalar("Weight/Fairness", weights[3], episode)
-
+        
         # CSV Log Data
         training_data.append({
             "episode": episode + 1,
             "total_steps": total_steps,
             "reward": episode_reward,
-            "avg_q": avg_q,
+            "accuracy": ep_hit_rate,
             "satisfaction": final_satisfaction,
             "actor_loss": avg_actor_loss,
-            "critic_loss": avg_critic_loss,
-            "w_eng": weights[0],
-            "w_sat": weights[1],
-            "w_div": weights[2],
-            "w_fair": weights[3]
+            "critic_loss": avg_critic_loss
         })
         
         if (episode+1) % 50 == 0:

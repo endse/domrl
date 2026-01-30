@@ -131,9 +131,34 @@ class GenerativeUserSimulator:
             
         self.h = h_next
         
-        # --- 3. Satisfaction Dynamics ---
+         # --- 3. Satisfaction Dynamics ---
         # Driven by the outcome of the interaction (chosen item)
         target_sat = sat_mean.item()
+        
+        # BOREDOM / REPETITIVENESS PENALTY
+        # If the chosen item was chosen recently, reduce target satisfaction.
+        # We need to store simulator-internal history
+        if not hasattr(self, 'sim_history'): self.sim_history = []
+        self.sim_history.append(chosen_item)
+        if len(self.sim_history) > 10: self.sim_history.pop(0)
+        
+        repetition_count = self.sim_history.count(chosen_item)
+        boredom_penalty = 0.0
+        if repetition_count > 2:
+            boredom_penalty = 0.1 * (repetition_count - 2)
+            
+        target_sat = max(0.0, target_sat - boredom_penalty)
+
+        # DIVERSITY BONUS (Novelty)
+        # If the slate had high variety, slight boost to base satisfaction target
+        diversity_bonus = 0.0
+        if is_slate:
+            unique_slate = len(set(action_input))
+            if unique_slate == len(action_input): # All unique
+                 diversity_bonus = 0.05
+        
+        target_sat = min(1.0, target_sat + diversity_bonus)
+
         noise = np.random.normal(0, np.sqrt(self.dt))
         dx = self.theta * (target_sat - self.current_satisfaction) * self.dt + self.sigma * noise
         self.current_satisfaction = np.clip(self.current_satisfaction + dx, 0.0, 1.0)
@@ -149,8 +174,10 @@ class GenerativeUserSimulator:
         is_match = (chosen_item == true_intent)
         
         if is_match:
+             # Reward high, but capped if bored
              click_prob = min(0.95, click_prob_base + 0.4)
-             self.current_satisfaction = min(1.0, self.current_satisfaction + 0.15)
+             sat_gain = 0.15 if repetition_count <= 2 else 0.05 # Diminishing returns
+             self.current_satisfaction = min(1.0, self.current_satisfaction + sat_gain)
              scroll_val = 0.5
              hover_val = np.random.normal(2.5, 0.5)
         else:

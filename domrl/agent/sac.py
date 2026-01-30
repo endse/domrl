@@ -5,7 +5,7 @@ import numpy as np
 from domrl.models.networks import Actor, Critic
 
 class SACAgent:
-    def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, cql_weight=0.0, bc_weight=0.0):
+    def __init__(self, state_dim, action_dim, hidden_dim=256, lr=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, cql_weight=0.0, bc_weight=0.0):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.gamma = gamma
@@ -16,9 +16,9 @@ class SACAgent:
         self.cql_weight = cql_weight
         self.bc_weight = bc_weight
 
-        self.actor = Actor(state_dim, action_dim).to(self.device)
-        self.critic = Critic(state_dim, action_dim).to(self.device)
-        self.critic_target = Critic(state_dim, action_dim).to(self.device)
+        self.actor = Actor(state_dim, action_dim, hidden_dim).to(self.device)
+        self.critic = Critic(state_dim, action_dim, hidden_dim).to(self.device)
+        self.critic_target = Critic(state_dim, action_dim, hidden_dim).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
