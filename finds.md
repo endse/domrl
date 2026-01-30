@@ -15,6 +15,7 @@ The DOM-RL framework is composed of two hierarchical agents interacting with a c
 
 ```mermaid
 graph TD
+<<<<<<< HEAD
     subgraph "Generative Environment"
         U(("User (Hidden State)")) -->|Signals (Clicks, Hover)| S[State Vector]
         S -->|Observation| WA
@@ -41,6 +42,24 @@ graph TD
     W -->|Scalarization| FR[Final Reward]
     FR -->|Update| WA
     FR -->|Update| SA
+=======
+    subgraph Environment
+        U[User Simulator] -->|Clicks / Hover / Scroll| S[State Vector]
+        W[Business Logic] -->|Dynamic Weights w1 w2 w3| S
+        U -->|Feedback| R[Base Rewards]
+        W -->|Weighting| RF[Final Reward Calculation]
+    end
+
+    subgraph Agent
+        S -->|Input: State + Weights| AN[Actor Network]
+        AN -->|Action Probabilities| A[Recommend Category]
+        S -->|Input| CN[Critic Network]
+        RF -->|Scalar Reward| CN
+    end
+
+    A -->|Show Content| U
+
+>>>>>>> e7f8a411cd5465b31308af55ed2b3b84285e6885
 ```
 
 **Explanation:**
