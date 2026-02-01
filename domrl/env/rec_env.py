@@ -99,6 +99,15 @@ class RealTimeRecEnv(gym.Env):
         
         return self._get_obs(), {}
 
+    def set_user_context(self, mood, time_of_day):
+        """Pass context to simulator"""
+        self.simulator.set_context(mood, time_of_day)
+        # Optionally update user_features[1] with normalized time for the Agent to see
+        # time is 0-24. Normalize to 0-1? Or just raw.
+        # user_features is shape (2,). [0] is enthusiasm. [1] was random "Time" (0-24).
+        # Let's sync it.
+        self.user_state[1] = time_of_day
+
     def step(self, action: int) -> tuple[dict, np.ndarray, bool, bool, dict]:
         """
         Executes one time step. Action is Slate Index.

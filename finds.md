@@ -333,5 +333,25 @@ The environment now simulates 4 distinct user archetypes:
 
 The Weight Agent must learn to identify these personas from the state (`user_features` + `micro_signals`) and adjust its strategy accordingly.
 
+
 ---
-*Generated for DOM-RL Project. Updated 2026-01-30.*
+
+## 8. Chapter 8: Feature Analysis - HITL & Context
+**New Features (v2.0)**: We introduced real-time Human-in-the-Loop feedback and Context Awareness.
+
+### Context Awareness: User Mood
+How does the simulator adapt to "Emotional Context"?
+![Mood Sad](logs/gallery/context_mood_sad.png)
+*   **Validation**: When the user context is set to **"Sad"**, the preference distribution shifts significantly towards **Comedy** (Cheer up) and **Drama** (wallow). The agent must learn to detect this shift or rely on the explicit context signal.
+
+### Temporal Dynamics: Time of Day
+![Time Night](logs/gallery/context_time_night.png)
+*   **Validation**: At **23:00 (Night)**, the preference for **Horror** and **Thriller** spikes, while "Daytime" genres like Documentary drop. This proves the Time-of-Day control effectively biases the simulation.
+
+### Human-in-the-Loop Adaptation
+Does the "Like" button actually work?
+![HITL Boost](logs/gallery/hitl_enthusiasm_boost.png)
+*   **Validation**: A manual **"Like"** interaction (at Step 5) causes an immediate, stepwise jump in **User Enthusiasm**. This triggers the system to transition from explore/safety mode to exploitation (high reward state), as seen in the "Enthusiasm vs Reward" correlation earlier.
+
+---
+*Generated for DOM-RL Project. Updated 2026-02-01.*

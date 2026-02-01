@@ -69,10 +69,55 @@ class GenerativeUserSimulator:
         self.persona_id = torch.tensor([persona_id], dtype=torch.long)
         self.current_satisfaction = 0.5
         
-        # Ornstein-Uhlenbeck params
+        # Ornstein-Uhlenbeck params (Restored)
         self.theta = 0.15
         self.sigma = 0.2
         self.dt = 0.1
+        
+        # Context Variables
+        self.current_mood = 0 # 0: Neutral, 1: Happy, 2: Sad, 3: Tired
+        self.time_of_day = 12.0 # 0-24
+        
+    def set_context(self, mood, time_of_day):
+        self.current_mood = mood
+        self.time_of_day = time_of_day
+        
+    def _apply_context_bias(self, logits):
+        """
+        Adjusts logits based on Mood and Time of Day.
+        Logits shape: (Num_Categories,) - numpy array or tensor
+        """
+        # Mappings (Indices based on MovieDatabase default map)
+        # 0:Action/Adv, 1:Comedy/Kids, 2:Drama/Rom, 3:SciFi/Fant, 4:Crime/Thril, 5:Horror, 6:Doc, 7:Music, 8:West, 9:Noir
+        
+        bias = np.zeros_like(logits)
+        
+        # 1. MOOD BIAS
+        if self.current_mood == 1: # Happy
+            bias[1] += 2.0  # Comedy
+            bias[0] += 1.0  # Adventure
+            bias[7] += 1.0  # Musical
+        elif self.current_mood == 2: # Sad
+            bias[1] += 1.5  # Comedy (Cheer up)
+            bias[2] += 2.0  # Drama (Wallow)
+        elif self.current_mood == 3: # Tired
+            bias[6] += 2.0  # Documentary (Passive)
+            bias[1] += 1.0  # Kids (Simple)
+            bias[4] -= 1.0  # Avoid Thrillers (Too intense)
+            
+        # 2. TIME BIAS
+        # Night (20:00 - 04:00) -> Horror, Thriller
+        if self.time_of_day >= 20 or self.time_of_day < 4:
+            bias[5] += 2.5 # Horror
+            bias[4] += 1.5 # Thriller/Crime
+            bias[9] += 1.0 # Noir
+        # Morning (06:00 - 11:00) -> Avoid Horror, prefer Doc/Kids
+        elif 6 <= self.time_of_day < 11:
+            bias[5] -= 3.0 # No Horror in morning
+            bias[6] += 1.0 # Doc
+            bias[1] += 0.5 # Animation
+            
+        return logits + bias
         
     def step(self, action_input):
         """
@@ -103,7 +148,11 @@ class GenerativeUserSimulator:
              # Peek at preferences
              _, target_logits, _, _ = self.net(dummy_action, self.h, self.persona_id)
         
-        probs_all = F.softmax(target_logits, dim=-1).numpy()[0] # (Num_Categories,)
+        logits_np = target_logits.numpy()[0]
+        # APPLY CONTEXT BIAS HERE
+        logits_biased = self._apply_context_bias(logits_np)
+        
+        probs_all = F.softmax(torch.tensor(logits_biased), dim=-1).numpy() # (Num_Categories,)
         
         chosen_item = 0
         if is_slate:

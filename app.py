@@ -12,6 +12,8 @@ from domrl.env.rec_env import RealTimeRecEnv
 from domrl.agent.sac import SACAgent
 from domrl.agent.weight_agent import WeightAgent
 
+import requests
+
 # ==========================================
 # 1. Configuration & Layout
 # ==========================================
@@ -56,6 +58,10 @@ def load_system():
     """Initializes the Environment and Agents (cached)."""
     env = RealTimeRecEnv(slate_size=3)
     
+    # --- Movie Database ---
+    from domrl.utils.movie_db import get_movie_db
+    movie_db = get_movie_db("c:/Users/cy569/Downloads/ml-latest/dataset")
+    
     # --- SAC Agent ---
     sac_agent = SACAgent(
         state_dim=0, 
@@ -91,16 +97,69 @@ def load_system():
     # Ideally load WeightAgent weights too if we saved them...
     # For now, it initializes random (which shows the UI structure at least)
     
-    return env, sac_agent, weight_agent, sac_path
+    return env, sac_agent, weight_agent, sac_path, movie_db
+
+@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
+def fetch_real_poster(imdb_id_int, api_key):
+    # Debugging logs to terminal
+    print(f"[DEBUG] Fetching poster. ID: {imdb_id_int}, KeyPresent: {bool(api_key)}")
+    
+    if not api_key or not imdb_id_int: 
+        print("[DEBUG] Missing Key or ID")
+        return None
+    try:
+        # Format IMDb ID: tt + 7 digits (with leading zeros)
+        imdb_str = f"tt{int(imdb_id_int):07d}"
+        
+        # Use Standard OMDb JSON API (more reliable than img.omdbapi.com)
+        url = f"http://www.omdbapi.com/?i={imdb_str}&apikey={api_key}"
+        
+        print(f"[DEBUG] Requesting Metadata: {url.replace(api_key, 'HIDDEN')}")
+        resp = requests.get(url, timeout=2)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('Response') == 'True':
+                poster_url = data.get('Poster')
+                if poster_url and poster_url != "N/A":
+                    print(f"[DEBUG] Found Poster: {poster_url}")
+                    return poster_url
+                else:
+                     print(f"[DEBUG] Poster field is N/A or missing")
+            else:
+                 print(f"[DEBUG] OMDb Error: {data.get('Error')}")
+        else:
+            print(f"[DEBUG] HTTP Error: {resp.status_code}")
+            
+    except Exception as e:
+        print(f"[DEBUG] Exception in fetch_real_poster: {e}")
+        return None
+    return None
+
+def get_slate_data(slate_indices):
+    from domrl.utils.movie_db import get_movie_db
+    db = get_movie_db()
+    
+    data = []
+    for idx_or_cat in slate_indices:
+        # slate_indices are category indices (0-9)
+        # Sample 1 movie (ID, Title) for this category
+        items = db.sample_movies_with_id(idx_or_cat, n=1)
+        mid, title = items[0]
+        data.append({"id": mid, "title": title})
+    return data
 
 def get_slate_names(slate_indices):
-    return [CATEGORY_NAMES[i] for i in slate_indices]
+    # Wrapper for legacy parts logging names
+    data = get_slate_data(slate_indices)
+    return [d['title'] for d in data]
 
 # ==========================================
 # 3. Session State Management
 # ==========================================
 if 'system_loaded' not in st.session_state:
-    st.session_state.env, st.session_state.sac_agent, st.session_state.weight_agent, st.session_state.model_source = load_system()
+    st.session_state.env, st.session_state.sac_agent, st.session_state.weight_agent, st.session_state.model_source, st.session_state.movie_db = load_system()
     st.session_state.system_loaded = True
 
 if 'obs' not in st.session_state:
@@ -140,6 +199,54 @@ with st.sidebar:
     )
     persona_map = {"Standard": 0, "Binger": 1, "Browser": 2, "Critic": 3}
     
+    # NEW: Context Controls
+    st.subheader("User Context")
+    c_ctx1, c_ctx2 = st.columns(2)
+    mood_label = c_ctx1.selectbox("Mood", ["Neutral", "Happy", "Sad", "Tired"], help="Biases genre preferences.")
+    mood_map = {"Neutral": 0, "Happy": 1, "Sad": 2, "Tired": 3}
+    
+    time_val = c_ctx2.slider("Hour (0-24)", 0, 24, 20, help="Time of Day affects genre preference (e.g. Horror at night).")
+    
+    # Update Environment Context
+    if 'env' in st.session_state:
+        st.session_state.env.set_user_context(mood_map[mood_label], float(time_val))
+    
+    # API Config
+    st.subheader("External Services")
+    # Using 'omdb_key' variable but storing in session state as generic 'api_key' or keeping 'tmdb_key' name for minimal refactor?
+    # Better to rename for clarity.
+    omdb_key = st.text_input("OMDb API Key", value="c19b492b", type="password", help="Enter Key for Real Posters (img.omdbapi.com)")
+    st.session_state.omdb_key = omdb_key
+    
+    # Debug Toggle
+    debug_mode = st.toggle("🛠️ Debug Poster Fetching", value=False)
+    st.session_state.debug_mode = debug_mode
+
+    st.session_state.omdb_key = omdb_key
+    
+    if omdb_key:
+        if st.button("Test Connection"):
+            # Try fetching Toy Story (IMDb: tt0114709)
+            try:
+                # Use the function logic manually
+                test_url = f"http://www.omdbapi.com/?i=tt0114709&apikey={omdb_key}"
+                r = requests.get(test_url, timeout=2)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data.get('Response') == 'True':
+                        poster = data.get('Poster')
+                        st.success(f"✅ API Key is Valid! Found: {data.get('Title')}")
+                        if poster and poster != 'N/A':
+                             st.image(poster, width=150)
+                        else:
+                             st.warning("Key valid but movie has no poster.")
+                    else:
+                        st.error(f"❌ OMDb Error: {data.get('Error')}")
+                else:
+                    st.error(f"❌ HTTP Error: {r.status_code}")
+            except Exception as e:
+                st.error(f"❌ Connection Failed: {e}")
+
     # Manual Override Switch
     st.subheader("Objective Override")
     enable_override = st.toggle("Enable Manual Weights", value=False)
@@ -234,14 +341,131 @@ with tab_live:
     
     if st.session_state.history:
         last_item = st.session_state.history[-1]
-        cols = st.columns(3)
-        slate_list = eval(last_item['slate'])
         
-        for i, (col, item_name) in enumerate(zip(cols, slate_list)):
-            with col:
-                st.info(f"Pos {i+1}: {item_name}")
+        cols = st.columns(3)
+        
+        # Try to use new rich object, fallback to names
+        if 'slate_obj' in last_item:
+            slate_data = last_item['slate_obj']
+            # slate_data is list of {id, title}
+            
+            for i, (col, item) in enumerate(zip(cols, slate_data)):
+                with col:
+                    mid = item['id']
+                    title = item['title']
+                    
+                    # Try Real Fetch
+                    poster = None
+                    debug_log = []
+                    
+                    # Look up IMDb ID
+                    imdb_id = st.session_state.movie_db.imdb_map.get(mid)
+                    debug_log.append(f"Movie ID: {mid} | IMDb ID: {imdb_id}")
+                    
+                    has_key = bool(st.session_state.get('omdb_key'))
+                    debug_log.append(f"API Key Present: {has_key}")
+                    
+                    if has_key:
+                         if imdb_id:
+                            poster = fetch_real_poster(imdb_id, st.session_state.omdb_key)
+                            status = "Success" if poster else "URL Gen Failed"
+                            debug_log.append(f"Fetch Result: {status}")
+                         else:
+                            debug_log.append("Skipping: No IMDb ID mapped")
+                    else:
+                        debug_log.append("Using Fallback: No API Key")
+                    
+                    if not poster:
+                         poster = f"https://placehold.co/400x600/101010/FFFFFF/png?text={title.replace(' ', '+')}"
+                    
+                    st.image(poster, use_container_width=True)
+                    st.caption(f"**{title}**")
+                    
+                    # --- INTERACTION BUTTONS ---
+                    b_col1, b_col2 = st.columns(2)
+                    
+                    # LIKE Button
+                    if b_col1.button("👍", key=f"like_{mid}_{st.session_state.step}", help="I like this! (Boosts Enthusiasm)"):
+                        # 1. Update Environment State Directly (Inject Reality)
+                        # CRITICAL FIX: Map Movie ID -> Category Index for the Agent's Embedding Layer
+                        cat_idx = st.session_state.movie_db.movie_cat_map.get(mid, 0) # Default to 0
+                        
+                        st.session_state.env.history = np.roll(st.session_state.env.history, -1)
+                        st.session_state.env.history[-1] = cat_idx 
+                        
+                        # Boost Enthusiasm
+                        current_enth = st.session_state.env.user_state[0]
+                        st.session_state.env.user_state[0] = min(1.0, current_enth + 0.2)
+                        
+                        # 2. Log User Feedback
+                        st.toast(f"You liked {title}! Recommendations updating...", icon="🎉")
+                        if 'interactions' not in st.session_state: st.session_state.interactions = []
+                        st.session_state.interactions.append({
+                            "step": st.session_state.step,
+                            "time": time.strftime("%H:%M:%S"),
+                            "movie": title,
+                            "action": "Like",
+                            "reward": 5.0
+                        })
+                        
+                        # 3. Accumulated Reward for this manual step
+                        st.session_state.total_reward += 5.0
+                        
+                        # 4. Advance Step (Manually) and Update Obs
+                        st.session_state.env.current_step += 1
+                        st.session_state.step += 1
+                        st.session_state.obs = st.session_state.env._get_obs()
+                        
+                        # 5. Rerun to generate NEW recommendations based on this Like
+                        st.rerun()
+
+                    # DISLIKE Button
+                    if b_col2.button("👎", key=f"dislike_{mid}_{st.session_state.step}", help="Not for me. (Reduces Enthusiasm)"):
+                        # Penalize Enthusiasm
+                        current_enth = st.session_state.env.user_state[0]
+                        st.session_state.env.user_state[0] = max(0.0, current_enth - 0.2)
+                        
+                        st.toast(f"You disliked {title}.", icon="📉")
+                        if 'interactions' not in st.session_state: st.session_state.interactions = []
+                        st.session_state.interactions.append({
+                            "step": st.session_state.step,
+                            "time": time.strftime("%H:%M:%S"),
+                            "movie": title,
+                            "action": "Dislike",
+                            "reward": -1.0
+                        })
+                        
+                        st.session_state.total_reward -= 1.0
+                        st.session_state.env.current_step += 1
+                        st.session_state.step += 1
+                        st.session_state.obs = st.session_state.env._get_obs()
+                        st.rerun()
+
+                    if st.session_state.get('debug_mode', False):
+                        with st.expander("Debug Info"):
+                            for log in debug_log:
+                                st.text(log)
+        else:
+            slate_names = eval(last_item['slate']) # Legacy
+            for i, (col, item_name) in enumerate(zip(cols, slate_names)):
+                with col:
+                    poster_url = f"https://placehold.co/400x600/101010/FFFFFF/png?text={item_name.replace(' ', '+')}"
+                    st.image(poster_url, use_container_width=True)
+                    st.caption(f"**{item_name}**")
+                    if st.session_state.get('debug_mode', False):
+                        st.caption("Legacy Mode (No ID available)")
                 
-        st.success(f"User Action: Clicked **{last_item.get('chosen_item_name', 'None')}** (+{last_item['reward']:.2f} Reward)")
+        # Only show this success message if it was a distinct step? 
+        # Actually, if we just reran, this will show the result of the LAST interaction.
+        last_interaction = None
+        if 'interactions' in st.session_state and st.session_state.interactions:
+            last_interaction = st.session_state.interactions[-1]
+            if last_interaction['step'] == st.session_state.step - 1:
+                 st.success(f"Feedback Recorded: **{last_interaction['action']}** on **{last_interaction['movie']}**")
+        
+        # Keep the old msg for auto-steps
+        if not last_interaction or last_interaction['step'] != st.session_state.step - 1:
+             st.success(f"User Action: Clicked **{last_item.get('chosen_item_name', 'None')}** (+{last_item['reward']:.2f} Reward)")
     else:
         st.warning("Waiting for initialization...")
 
@@ -264,10 +488,11 @@ with tab_live:
             
             # Step Env
             # Map action to slate first for logging
-            slate = st.session_state.env.slate_mapper.get_slate(action_idx)
-            slate_names = get_slate_names(slate)
-
-            # reward is a vector (4D)
+            # HERE: We generate the slate data (IDs and Titles)
+            slate_indices = st.session_state.env.slate_mapper.get_slate(action_idx)
+            slate_data = get_slate_data(slate_indices) # List of dicts {id, title}
+            slate_names = [d['title'] for d in slate_data]
+            
             next_obs, reward_vec, terminated, truncated, _ = st.session_state.env.step(action_idx)
             
             # Scalarize for metric
@@ -278,10 +503,11 @@ with tab_live:
             st.session_state.total_reward += scalar_reward
             st.session_state.history.append({
                 "step": st.session_state.step,
-                "slate": str(slate_names),
-                "reward": float(scalar_reward), # Ensure float
+                "slate": str(slate_names), # Legacy: keep as string of names
+                "slate_obj": slate_data,   # NEW: Store rich data
+                "reward": float(scalar_reward), 
                 "satisfaction": sat_val,
-                "chosen_item_name": CATEGORY_NAMES[chosen_idx],
+                "chosen_item_name": slate_names[0], 
                 "w_eng": effective_weights[0],
                 "w_sat": effective_weights[1]
             })
@@ -298,6 +524,12 @@ with tab_live:
 # ------------------------------------------
 with tab_analysis:
     st.subheader("📊 Session Analytics")
+
+    # NEW: Interaction Log
+    if 'interactions' in st.session_state and st.session_state.interactions:
+        st.info("Human Feedback Recorded")
+        st.dataframe(pd.DataFrame(st.session_state.interactions).iloc[::-1], use_container_width=True) # Show newest first
+        st.divider()
     
     if st.session_state.history:
         df = pd.DataFrame(st.session_state.history)

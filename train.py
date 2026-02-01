@@ -56,7 +56,7 @@ def train(args):
             
             # Offline Training Phase
             print("Starting Offline Training Phase...")
-            offline_steps = 5000
+            offline_steps = args.offline_steps
             for i in range(offline_steps):
                 critic_loss, actor_loss, alpha, q_vals = agent.update(replay_buffer, args.batch_size)
                 if i % 1000 == 0:
@@ -189,6 +189,7 @@ if __name__ == "__main__":
     parser.add_argument("--cql_weight", type=float, default=0.0, help="Weight for CQL Loss")
     parser.add_argument("--bc_weight", type=float, default=0.0, help="Weight for Behavior Cloning Loss")
     parser.add_argument("--slate_size", type=int, default=3, help="Size of recommendation slate")
+    parser.add_argument("--offline_steps", type=int, default=5000, help="Number of offline gradient updates")
     
     args = parser.parse_args()
     print(f"Training Device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")
