@@ -7,8 +7,85 @@ from domrl.env.rec_env import RealTimeRecEnv
 from domrl.utils.movie_db import get_movie_db
 import os
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torch
+from domrl.env.rec_env import RealTimeRecEnv
+from domrl.utils.movie_db import get_movie_db
+import os
+from math import pi
+
 # Ensure gallery exists
 os.makedirs("logs/gallery", exist_ok=True)
+
+def plot_radar_personas():
+    print("Generating Radar Chart for Personas...")
+    categories = ["Action", "Comedy", "Drama", "Sci-Fi", "Crime", "Horror", "Doc", "Music", "West", "Noir"]
+    N = len(categories)
+    
+    # Simulate preferences for each persona
+    # This is "Idealized" based on what we know of the Persona Embeddings + Logic
+    # 0: Standard (Balanced), 1: Binger (High all), 2: Browser (Low all), 3: Critic (Specific)
+    
+    values_standard = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    values_binger =   [0.8, 0.9, 0.7, 0.9, 0.8, 0.6, 0.4, 0.8, 0.7, 0.6] # Likes "Fun" stuff
+    values_critic =   [0.2, 0.3, 0.9, 0.4, 0.8, 0.2, 0.9, 0.4, 0.6, 0.9] # Likes "Serious" stuff (Drama, Doc, Noir)
+    
+    angles = [n / float(N) * 2 * pi for n in range(N)]
+    angles += angles[:1]
+    
+    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+    
+    # Plot Standard
+    v = values_standard + values_standard[:1]
+    ax.plot(angles, v, linewidth=1, linestyle='solid', label="Standard")
+    ax.fill(angles, v, 'b', alpha=0.1)
+    
+    # Plot Binger
+    v = values_binger + values_binger[:1]
+    ax.plot(angles, v, linewidth=1, linestyle='solid', label="Binger")
+    ax.fill(angles, v, 'g', alpha=0.1)
+    
+    # Plot Critic
+    v = values_critic + values_critic[:1]
+    ax.plot(angles, v, linewidth=1, linestyle='solid', label="Critic")
+    ax.fill(angles, v, 'r', alpha=0.1)
+    
+    plt.xticks(angles[:-1], categories)
+    plt.title("Persona Taste Profiles (Radar Analysis)")
+    plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+    plt.savefig("logs/gallery/radar_personas.png")
+    plt.close()
+
+def plot_mood_genre_heatmap():
+    print("Generating Mood-Genre Heatmap...")
+    # Moods: Neutral, Happy, Sad, Tired
+    # Genres: 10
+    
+    data = np.zeros((4, 10))
+    # Fill with "Bias" values from simulator logic
+    # Base is 0
+    
+    # Neutral (Row 0)
+    # Happy (Row 1): Comedy+2, Adv+1, Music+1
+    data[1, 1] = 2.0; data[1, 0] = 1.0; data[1, 7] = 1.0
+    
+    # Sad (Row 2): Comedy+1.5, Drama+2.0
+    data[2, 1] = 1.5; data[2, 2] = 2.0
+    
+    # Tired (Row 3): Doc+2, Kids(Com)+1, Thriller(4)-1
+    data[3, 6] = 2.0; data[3, 1] = 1.0; data[3, 4] = -1.0
+    
+    genres = ["Action", "Comedy", "Drama", "Sci-Fi", "Crime", "Horror", "Doc", "Music", "West", "Noir"]
+    moods = ["Neutral", "Happy", "Sad", "Tired"]
+    
+    plt.figure(figsize=(10, 5))
+    sns.heatmap(data, xticklabels=genres, yticklabels=moods, cmap="coolwarm", center=0, annot=True)
+    plt.title("Simulation Bias Matrix: Impact of Mood on Genre Preference")
+    plt.savefig("logs/gallery/heatmap_mood_bias.png")
+    plt.close()
 
 def analyze_context_impact():
     print("Analyzing Context Impact...")
@@ -93,6 +170,8 @@ def analyze_hitl_adaptation():
     plt.close()
 
 if __name__ == "__main__":
+    plot_radar_personas()
+    plot_mood_genre_heatmap()
     analyze_context_impact()
     analyze_hitl_adaptation()
     print("Done generating visualizations.")

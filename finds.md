@@ -351,7 +351,20 @@ How does the simulator adapt to "Emotional Context"?
 ### Human-in-the-Loop Adaptation
 Does the "Like" button actually work?
 ![HITL Boost](logs/gallery/hitl_enthusiasm_boost.png)
-*   **Validation**: A manual **"Like"** interaction (at Step 5) causes an immediate, stepwise jump in **User Enthusiasm**. This triggers the system to transition from explore/safety mode to exploitation (high reward state), as seen in the "Enthusiasm vs Reward" correlation earlier.
+*   **Validation**: A manual **"Like"** interaction (at Step 5) causes an immediate, stepwise jump in **User Enthusiasm**. This triggers the system to transition from explore/safety mode to exploitation (high reward state).
+
+### Persona DNA Analysis (Radar Chart)
+We analyzed the theoretical "Taste Profiles" of our 4 simulated personas to ensure distinct behavior.
+![Radar Persona](logs/gallery/radar_personas.png)
+*   **Insight**: The **Standard** user (Blue) has a balanced, circular profile. The **Critic** (Red) shows sharp spikes for "Serious" genres (Drama, Doc, Noir) while rejecting "Popcorn" movies. The **Binger** (Green) consumes almost everything but leans towards entertainment.
+
+### The "Mood Matrix" (Heatmap)
+How does internal state bias external action?
+![Mood Matrix](logs/gallery/heatmap_mood_bias.png)
+*   **Insight**: This heatmap reveals the hidden **Logit Bias** applied by the simulator.
+    *   **Red Zones**: High positive bias (e.g., Happy -> Comedy).
+    *   **Blue Zones**: Negative bias (e.g., Tired -> Thriller).
+    *   This matrix proves the environment is not static; it "breathes" based on user context.
 
 ---
 *Generated for DOM-RL Project. Updated 2026-02-01.*
