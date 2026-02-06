@@ -19,7 +19,11 @@ def load_latest_actor(agent, log_dir="logs"):
         return
     latest = max(files, key=os.path.getctime)
     print(f"Loading checkpoint: {latest}")
-    agent.actor.load_state_dict(torch.load(latest))
+    try:
+        agent.actor.load_state_dict(torch.load(latest))
+    except Exception as e:
+        print(f"Failed to load checkpoint {latest}: {e}")
+        print("Falling back to random weights.")
 
 def collect_data(episodes=100):
     env = RealTimeRecEnv()
