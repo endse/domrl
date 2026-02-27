@@ -1,9 +1,25 @@
+"""
+Weight Agent — Hybrid SAC-NSGA-II Architecture
+
+Paper Section IV-E: Combines adaptive fine-tuning of deep RL (SAC)
+with the global exploration of evolutionary algorithms (NSGA-II).
+
+NSGA-II acts as a 'pre-optimizer' for the policy space, generating
+diverse candidate weight vectors. The SAC-based WeightAgent then
+refines these through real-time gradient-based optimization.
+
+Paper IV-C: Multi-Objective Reinforcement Learning (MORL)
+    Maximize F(x) = {f1(x), -f2(x), f3(x), f4(x), f5(x)}
+    where objectives are Engagement, Churn(min), Trust, Diversity, Satisfaction.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 from domrl.models.networks import StateEncoder
+from domrl.agent.nsga2 import NSGA2Optimizer
 
 def quantile_huber_loss(preds, target, tau, kappa=1.0):
     """
@@ -11,13 +27,10 @@ def quantile_huber_loss(preds, target, tau, kappa=1.0):
     target: (B, N_QUANTILES)
     tau: (N_QUANTILES,) - quantile midpoints
     """
-    # preds: (B, N, 1)
-    # target: (B, 1, N)
     preds = preds.unsqueeze(-1)
     target = target.unsqueeze(1)
     
-    # huber loss
-    u = target - preds # (B, N, N)
+    u = target - preds
     abs_u = torch.abs(u)
     huber_loss = torch.where(
         abs_u <= kappa,
@@ -25,71 +38,121 @@ def quantile_huber_loss(preds, target, tau, kappa=1.0):
         kappa * (abs_u - 0.5 * kappa)
     )
     
-    # quantile regression loss
-    # delta(u < 0) = 1 if u < 0 else 0
-    # loss = |tau - delta(u<0)| * huber_loss
     u_neg = (u < 0).float().detach()
-    tau = tau.view(1, -1, 1) # Broadcast to (1, N, 1) for the 'prediction' dimension
-    
-    # Note: QR-DQN usually does:
-    # element-wise loss between every pred quantile and every target quantile
-    # Then sum/mean.
+    tau = tau.view(1, -1, 1)
     
     loss = torch.abs(tau - u_neg) * huber_loss
     return loss.mean()
 
 class WeightNetwork(nn.Module):
-    def __init__(self, action_dim=10, hidden_dim=64):
+    """
+    Paper IV-E: Actor network for weight generation.
+    Outputs 5 gated weights for multi-objective scalarization.
+    
+    Paper IV-C Table:
+    - Engagement (CTR / Watch Time)
+    - User Trust (Retention Rate)
+    - Churn Mitigation (Inter-session Interval)
+    - Diversity (Coverage Score)
+    - Satisfaction (Long-term)
+    """
+    def __init__(self, action_dim=10, num_items=10, hidden_dim=64, num_objectives=5):
         super(WeightNetwork, self).__init__()
-        self.encoder = StateEncoder(action_dim=action_dim, hidden_dim=hidden_dim)
+        self.num_objectives = num_objectives
+        self.encoder = StateEncoder(action_dim=action_dim, num_items=num_items, hidden_dim=hidden_dim)
         self.fc1 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 4) # Output 4 weights (Eng, Sat, Div, Fair)
+        self.ln1 = nn.LayerNorm(hidden_dim)
+        
+        # Two heads
+        self.fc_weights = nn.Linear(hidden_dim, num_objectives)  # Softmax weights
+        self.fc_gates = nn.Linear(hidden_dim, num_objectives)    # Sigmoid gates
         
     def forward(self, state):
         x = self.encoder(state)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        weights = F.softmax(x, dim=-1)
-        return weights
+        x = F.relu(self.ln1(self.fc1(x)))
+        
+        raw_weights = F.softmax(self.fc_weights(x), dim=-1)
+        gates = torch.sigmoid(self.fc_gates(x))
+        
+        # Gated Multi-Objective weights
+        final_weights = raw_weights * gates
+        
+        # Scale to maintain consistent reward magnitude
+        final_weights = final_weights * float(self.num_objectives)
+        
+        return final_weights
 
 class QuantileMetaCritic(nn.Module):
-    def __init__(self, action_dim=10, hidden_dim=64, num_quantiles=25):
+    """
+    Distributional critic for risk-aware weight optimization.
+    Uses Quantile Regression for distributional value estimation.
+    """
+    def __init__(self, action_dim=10, num_items=10, hidden_dim=64, num_quantiles=25):
         super(QuantileMetaCritic, self).__init__()
         self.num_quantiles = num_quantiles
-        # StateEncoder includes weights in the input embedding
-        self.encoder = StateEncoder(action_dim=action_dim, hidden_dim=hidden_dim)
+        self.encoder = StateEncoder(action_dim=action_dim, num_items=num_items, hidden_dim=hidden_dim)
         self.fc1 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, num_quantiles) # Output N quantiles
+        self.ln1 = nn.LayerNorm(hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, num_quantiles)
         
     def forward(self, state):
         x = self.encoder(state)
-        x = F.relu(self.fc1(x))
+        x = F.relu(self.ln1(self.fc1(x)))
         qs = self.fc2(x)
         return qs
 
 class WeightAgent:
-    def __init__(self, action_dim=10, hidden_dim=64, lr=1e-4, gamma=0.99, num_quantiles=25, risk_level=0.1, monotony_weight=1.0):
+    """
+    Paper IV-E: Hybrid SAC-NSGA-II Weight Agent.
+    
+    A shared critic learns to generalize across various goal weightings,
+    while a population of actors is evolved using NSGA-II for coverage.
+    
+    The NSGA-II optimizer periodically evolves the weight population,
+    and the best Pareto-front solutions seed the gradient-based
+    WeightNetwork training.
+    """
+    def __init__(self, action_dim=10, num_items=10, hidden_dim=64, lr=1e-4, 
+                 gamma=0.99, num_quantiles=25, risk_level=0.1, monotony_weight=1.0,
+                 num_objectives=5, nsga2_pop_size=50, nsga2_generations=20):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.gamma = gamma
         self.num_quantiles = num_quantiles
-        self.risk_level = risk_level # Alpha for CVaR (e.g., 0.1 for worst 10%)
+        self.risk_level = risk_level
         self.monotony_weight = monotony_weight
+        self.num_objectives = num_objectives
         
         # Quantile Midpoints (Constant)
         self.tau = (torch.arange(num_quantiles, device=self.device, dtype=torch.float32) + 0.5) / num_quantiles
         
-        self.actor = WeightNetwork(action_dim=action_dim, hidden_dim=hidden_dim).to(self.device)
+        self.actor = WeightNetwork(
+            action_dim=action_dim, num_items=num_items, 
+            hidden_dim=hidden_dim, num_objectives=num_objectives
+        ).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
         
-        self.critic = QuantileMetaCritic(action_dim=action_dim, hidden_dim=hidden_dim, num_quantiles=num_quantiles).to(self.device)
+        self.critic = QuantileMetaCritic(
+            action_dim=action_dim, num_items=num_items, 
+            hidden_dim=hidden_dim, num_quantiles=num_quantiles
+        ).to(self.device)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
         
+        # Paper IV-D & IV-E: NSGA-II Optimizer for Pareto-optimal weight discovery
+        self.nsga2 = NSGA2Optimizer(
+            num_objectives=num_objectives,
+            pop_size=nsga2_pop_size,
+            num_generations=nsga2_generations,
+        )
+        
+        # Track episode reward vectors for NSGA-II evaluation
+        self.episode_reward_vectors = []
+        self.nsga2_best_weights = None
+        
     def select_weights(self, state):
-        # Convert state dict to tensor
+        """Select objective weights using the WeightNetwork."""
         state_tensor = {}
         for k, v in state.items():
             if k == 'history' or k == 'persona_id':
-                # Ensure correct shape (1, Sequence) or (1,)
                 t = torch.as_tensor(v, device=self.device, dtype=torch.long)
                 if t.dim() == 0: t = t.unsqueeze(0)
                 if t.dim() == 1 and k=='history': t = t.unsqueeze(0)
@@ -106,55 +169,87 @@ class WeightAgent:
     def calculate_cvar(self, quantiles, alpha=0.1):
         """
         Calculate conditional value at risk for the lower tail (worst cases).
-        Since quantiles are outputted (approx), we take the lowest ones up to alpha.
         """
-        # Quantiles are largely unordered coming out of NN unless we enforce it, 
-        # but for QR-DQN we usually sort them for interpretation or C51.
-        # Actually QR-DQN minimizes Wasserstein distance to sorted targets, so they tend to sort.
-        # Let's sort explicitly.
         sorted_qs, _ = torch.sort(quantiles, dim=-1)
-        
-        # Index for the cutoff
-        # e.g. 25 quantiles. alpha=0.1 => use 2.5 => 3 quantiles.
         k = int(self.num_quantiles * alpha)
         if k < 1: k = 1
-        
-        # Average the worst k outcomes
         cvar = sorted_qs[:, :k].mean(dim=1)
         return cvar
 
+    def record_reward_vector(self, reward_vec: np.ndarray):
+        """
+        Record a reward vector from an episode step for NSGA-II evaluation.
+        """
+        self.episode_reward_vectors.append(reward_vec.copy())
+    
+    def evolve_nsga2(self) -> np.ndarray:
+        """
+        Paper IV-E: Run NSGA-II evolution step.
+        
+        Evolves the population of weight vectors using accumulated
+        reward vectors as objective evaluations. Returns the best
+        balanced weights from the Pareto front.
+        
+        Returns:
+            Pareto-optimal weight vector, or None if not enough data
+        """
+        if len(self.episode_reward_vectors) < 10:
+            return None
+        
+        # Evaluate each weight vector in the population
+        reward_matrix = np.array(self.episode_reward_vectors[-100:])  # Last 100 steps
+        
+        pop_objectives = np.zeros((self.nsga2.pop_size, self.num_objectives))
+        for i, weight_vec in enumerate(self.nsga2.population):
+            # Compute weighted scores for each objective
+            weighted_rewards = reward_matrix * weight_vec[np.newaxis, :]
+            pop_objectives[i] = np.mean(weighted_rewards, axis=0)
+        
+        self.nsga2.set_objectives(pop_objectives)
+        
+        # Evolve
+        pareto_weights = self.nsga2.evolve()
+        
+        # Get best balanced solution
+        self.nsga2_best_weights = self.nsga2.get_best_weights(strategy="balanced")
+        
+        # Clear accumulated vectors
+        self.episode_reward_vectors = self.episode_reward_vectors[-50:]
+        
+        return self.nsga2_best_weights
+    
+    def get_nsga2_hypervolume(self) -> float:
+        """Get current NSGA-II Pareto front hypervolume for logging."""
+        return self.nsga2.get_hypervolume()
+
     def update(self, replay_buffer, batch_size=64):
+        """
+        Paper IV-E: Hybrid update combining gradient-based critic/actor
+        with NSGA-II Pareto-optimal seeding.
+        """
         state, action, next_state, reward, not_done, meta_reward = replay_buffer.sample(batch_size)
         
         # --- 1. Update Meta-Critic (Distributional) ---
         with torch.no_grad():
-            # Target Policy: w_next = actor(next_state)
             next_weights = self.actor(next_state)
             
-            # Predict Quantiles at next state
             next_state_pred = next_state.copy()
             next_state_pred['weights'] = next_weights
             
-            next_model_quantiles = self.critic(next_state_pred) # (B, N)
+            next_model_quantiles = self.critic(next_state_pred)
             
-            # Bellman Update for Quantiles: r + gamma * Z(s')
-            # meta_reward is (B, 1), mask is (B, 1)
-            target_quantiles = meta_reward + (self.gamma * next_model_quantiles * not_done) # Broadcased
+            target_quantiles = meta_reward + (self.gamma * next_model_quantiles * not_done)
             
-        # Current Prediction
-        current_quantiles = self.critic(state) # (B, N)
+        current_quantiles = self.critic(state)
         
-        # Quantile Huber Loss
         critic_loss = quantile_huber_loss(current_quantiles, target_quantiles, self.tau)
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
         self.critic_optimizer.step()
         
         # --- 2. Update Weight-Actor ---
-        # Objective: Maximize CVaR of Z(s, actor(s))
-        # Contraint: Minimize || w_new - w_old ||^2 (Monotonicity/Stability)
-        
         pred_weights = self.actor(state)
         
         state_pred = state.copy()
@@ -162,20 +257,27 @@ class WeightAgent:
         
         pred_quantiles = self.critic(state_pred)
         
-        # Calculate CVaR (Risk-Aware Objective)
-        # We want to maximize the lower tail (worst outcomes)
+        # CVaR objective (Risk-Aware)
         current_cvar = self.calculate_cvar(pred_quantiles, self.risk_level)
         objective_loss = -current_cvar.mean()
         
         # Monotonicity Penalty
-        # current weights in state are 'prev_weights', pred_weights are 'new_weights'
         prev_weights = state['weights']
         monotonicity_loss = F.mse_loss(pred_weights, prev_weights)
         
-        actor_loss = objective_loss + (self.monotony_weight * monotonicity_loss)
+        # Paper IV-E: NSGA-II seeding loss — pull actor toward Pareto-optimal weights
+        nsga2_loss = torch.tensor(0.0, device=self.device)
+        if self.nsga2_best_weights is not None:
+            target_nsga2 = torch.tensor(
+                self.nsga2_best_weights, dtype=torch.float32, device=self.device
+            ).unsqueeze(0).expand(pred_weights.shape[0], -1)
+            nsga2_loss = F.mse_loss(pred_weights, target_nsga2) * 0.1
+        
+        actor_loss = objective_loss + (self.monotony_weight * monotonicity_loss) + nsga2_loss
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
         self.actor_optimizer.step()
         
         return critic_loss.item(), actor_loss.item()

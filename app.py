@@ -60,12 +60,14 @@ def load_system():
     
     # --- Movie Database ---
     from domrl.utils.movie_db import get_movie_db
-    movie_db = get_movie_db("c:/Users/cy569/Downloads/ml-latest/dataset")
+    from domrl.config import cfg
+    movie_db = get_movie_db(cfg.MOVIE_LENS_PATH)
     
     # --- SAC Agent ---
     sac_agent = SACAgent(
         state_dim=0, 
         action_dim=env.action_space.n,
+        num_items=env.num_categories,
         hidden_dim=512
     )
     # Load Weights for SAC
@@ -73,7 +75,7 @@ def load_system():
     import glob
     import os
     
-    checkpoints = glob.glob("logs/actor_*.pth")
+    checkpoints = glob.glob(os.path.join(cfg.MODEL_CHECKPOINT_DIR, "actor_*.pth"))
     sac_path = None
     if checkpoints:
         # Sort by modification time (newest first) or by name if needed. 
@@ -92,6 +94,7 @@ def load_system():
     # Note: action_dim=10 for Embeddings
     weight_agent = WeightAgent(
         action_dim=10, 
+        num_items=env.num_categories,
         hidden_dim=64
     )
     # Ideally load WeightAgent weights too if we saved them...
@@ -100,13 +103,13 @@ def load_system():
     return env, sac_agent, weight_agent, sac_path, movie_db
 
 @st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False)
 def fetch_real_poster(imdb_id_int, api_key):
     # Debugging logs to terminal
-    print(f"[DEBUG] Fetching poster. ID: {imdb_id_int}, KeyPresent: {bool(api_key)}")
+    if cfg.DEBUG:
+        print(f"[DEBUG] Fetching poster. ID: {imdb_id_int}, KeyPresent: {bool(api_key)}")
     
     if not api_key or not imdb_id_int: 
-        print("[DEBUG] Missing Key or ID")
+        if cfg.DEBUG: print("[DEBUG] Missing Key or ID")
         return None
     try:
         # Format IMDb ID: tt + 7 digits (with leading zeros)
@@ -115,7 +118,7 @@ def fetch_real_poster(imdb_id_int, api_key):
         # Use Standard OMDb JSON API (more reliable than img.omdbapi.com)
         url = f"http://www.omdbapi.com/?i={imdb_str}&apikey={api_key}"
         
-        print(f"[DEBUG] Requesting Metadata: {url.replace(api_key, 'HIDDEN')}")
+        if cfg.DEBUG: print(f"[DEBUG] Requesting Metadata: {url.replace(api_key, 'HIDDEN')}")
         resp = requests.get(url, timeout=2)
         
         if resp.status_code == 200:
@@ -123,23 +126,24 @@ def fetch_real_poster(imdb_id_int, api_key):
             if data.get('Response') == 'True':
                 poster_url = data.get('Poster')
                 if poster_url and poster_url != "N/A":
-                    print(f"[DEBUG] Found Poster: {poster_url}")
+                    if cfg.DEBUG: print(f"[DEBUG] Found Poster: {poster_url}")
                     return poster_url
                 else:
-                     print(f"[DEBUG] Poster field is N/A or missing")
+                     if cfg.DEBUG: print(f"[DEBUG] Poster field is N/A or missing")
             else:
-                 print(f"[DEBUG] OMDb Error: {data.get('Error')}")
+                 if cfg.DEBUG: print(f"[DEBUG] OMDb Error: {data.get('Error')}")
         else:
-            print(f"[DEBUG] HTTP Error: {resp.status_code}")
+            if cfg.DEBUG: print(f"[DEBUG] HTTP Error: {resp.status_code}")
             
     except Exception as e:
-        print(f"[DEBUG] Exception in fetch_real_poster: {e}")
+        if cfg.DEBUG: print(f"[DEBUG] Exception in fetch_real_poster: {e}")
         return None
     return None
 
 def get_slate_data(slate_indices):
     from domrl.utils.movie_db import get_movie_db
-    db = get_movie_db()
+    from domrl.config import cfg
+    db = get_movie_db(cfg.MOVIE_LENS_PATH)
     
     data = []
     for idx_or_cat in slate_indices:
@@ -215,7 +219,8 @@ with st.sidebar:
     st.subheader("External Services")
     # Using 'omdb_key' variable but storing in session state as generic 'api_key' or keeping 'tmdb_key' name for minimal refactor?
     # Better to rename for clarity.
-    omdb_key = st.text_input("OMDb API Key", value="c19b492b", type="password", help="Enter Key for Real Posters (img.omdbapi.com)")
+    from domrl.config import cfg
+    omdb_key = st.text_input("OMDb API Key", value=cfg.OMDB_API_KEY, type="password", help="Enter Key for Real Posters (img.omdbapi.com)")
     st.session_state.omdb_key = omdb_key
     
     # Debug Toggle

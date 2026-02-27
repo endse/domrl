@@ -115,3 +115,63 @@ def load_movielens_data(dataset_path, history_len=10, max_rows=100000):
             
     print(f"Generated {len(transitions)} transitions.")
     return transitions
+
+def load_user_sequences(dataset_path, min_len=5, max_rows=100000):
+    """
+    Loads MovieLens data and returns a list of action sequences (category indices) per user.
+    Used for training the World Model (UserDynamicsNet).
+    """
+    import os
+    import pandas as pd
+    
+    ratings_file = os.path.join(dataset_path, "ratings.csv")
+    movies_file = os.path.join(dataset_path, "movies.csv")
+    
+    if not os.path.exists(ratings_file) or not os.path.exists(movies_file):
+        raise FileNotFoundError("Dataset files not found.")
+        
+    # Load Movies & Map to Categories
+    movies = pd.read_csv(movies_file)
+    
+    genre_map = {
+        "Action": 0, "Adventure": 0, "War": 0, 
+        "Comedy": 1, "Children": 1, "Animation": 1,
+        "Drama": 2, "Romance": 2,
+        "Sci-Fi": 3, "Fantasy": 3,
+        "Crime": 4, "Mystery": 4, "Thriller": 4,
+        "Horror": 5,
+        "Documentary": 6,
+        "Musical": 7,
+        "Western": 8,
+        "Film-Noir": 9,
+        "(no genres listed)": 0 
+    }
+    
+    def get_category(genre_str):
+        if not isinstance(genre_str, str): return 0
+        first_genre = genre_str.split('|')[0]
+        return genre_map.get(first_genre, 0)
+
+    movies['category'] = movies['genres'].apply(get_category)
+    movie_cat_map = dict(zip(movies['movieId'], movies['category']))
+    
+    # Load Ratings
+    ratings = pd.read_csv(ratings_file, nrows=max_rows)
+    ratings = ratings.sort_values(by=['userId', 'timestamp'])
+    
+    sequences = []
+    
+    grouped = ratings.groupby('userId')
+    print(f"Extracting sequences from {len(grouped)} users...")
+    
+    for user_id, user_data in grouped:
+        seq = []
+        for movie_id in user_data['movieId']:
+            cat = movie_cat_map.get(movie_id, 0)
+            seq.append(cat)
+        
+        if len(seq) >= min_len:
+            sequences.append(seq)
+            
+    print(f"Extracted {len(sequences)} valid sequences.")
+    return sequences

@@ -1,3 +1,18 @@
+"""
+Soft Actor-Critic (SAC) Agent
+
+Paper Section IV-A & IV-B: Maximum Entropy Reinforcement Learning.
+
+The SAC agent maximizes both cumulative reward and policy entropy:
+    J(π) = Σ E[r(s_t, a_t) + α·H(π(·|s_t))]
+
+Key components:
+- Twin critics (Q1, Q2) to mitigate overestimation bias
+- Entropy-regularized policy with dynamic temperature α
+- Soft Bellman equation for value estimation
+- Reparameterization trick with tanh squashing correction
+"""
+
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -5,30 +20,50 @@ import numpy as np
 from domrl.models.networks import Actor, Critic
 
 class SACAgent:
-    def __init__(self, state_dim, action_dim, hidden_dim=256, lr=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, cql_weight=0.0, bc_weight=0.0):
+    """
+    Paper IV-B: Soft Actor-Critic with entropy-augmented exploration.
+    
+    The temperature parameter α controls exploration vs exploitation:
+    - Higher α → broader exploration of state-action manifold
+    - Lower α → exploitation of known high-reward trajectories
+    """
+    def __init__(self, state_dim, action_dim, num_items=10, hidden_dim=256, 
+                 lr=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, 
+                 cql_weight=0.0, bc_weight=0.0, grad_clip=1.0):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.gamma = gamma
         self.tau = tau
         self.alpha = alpha
         self.auto_alpha = auto_alpha
+        # Paper IV-A: Target entropy H_target = -log(1/|A|) * 0.98
         self.target_entropy = -np.log(1.0 / action_dim) * 0.98
         self.cql_weight = cql_weight
         self.bc_weight = bc_weight
+        self.grad_clip = grad_clip  # Gradient clipping for stability
 
-        self.actor = Actor(state_dim, action_dim, hidden_dim).to(self.device)
-        self.critic = Critic(state_dim, action_dim, hidden_dim).to(self.device)
-        self.critic_target = Critic(state_dim, action_dim, hidden_dim).to(self.device)
+        # Paper IV-B: Actor generates distribution over content slates
+        self.actor = Actor(state_dim, action_dim, num_items=num_items, hidden_dim=hidden_dim).to(self.device)
+        # Paper IV-B: Twin critic networks (Q1, Q2) — using min(Q1, Q2) mitigates overestimation
+        self.critic = Critic(state_dim, action_dim, num_items=num_items, hidden_dim=hidden_dim).to(self.device)
+        self.critic_target = Critic(state_dim, action_dim, num_items=num_items, hidden_dim=hidden_dim).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
         
+        # Paper IV-A: Dynamic temperature parameter α
         if self.auto_alpha:
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
             self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr)
         
     def select_action(self, state, evaluate=False):
+        """
+        Select action using the current policy.
+        
+        Paper IV-B: In evaluation mode, uses deterministic action (mean).
+        In training, samples from the stochastic policy for exploration.
+        """
         # State is a dict of numpy arrays. Convert to dict of tensors with batch dim.
         state_tensor = {}
         for k, v in state.items():
@@ -44,88 +79,77 @@ class SACAgent:
                 
         with torch.no_grad():
             if evaluate:
-                _, probs, _ = self.actor.sample(state_tensor)
-                action = torch.argmax(probs, dim=1)
+                mean, log_std = self.actor(state_tensor)
+                action = torch.tanh(mean) # Deterministic action for eval
             else:
                 action, _, _ = self.actor.sample(state_tensor)
-        return action.item()
+                
+        return action.cpu().numpy()[0]
 
     def update(self, replay_buffer, batch_size=256):
+        """
+        Paper IV-B: Full SAC update with:
+        1. Soft Bellman equation for critic update
+        2. Entropy-regularized actor update
+        3. Dynamic alpha tuning
+        4. Polyak averaging for target network
+        """
         state, action, next_state, reward, not_done, _ = replay_buffer.sample(batch_size)
         
         # ------------------- #
         #  Critic Update      #
+        #  Paper IV-B: Soft Bellman Equation
+        #  Q(s,a) = r(s,a) + γ·E[Q(s',a') - α·log π(a'|s')]
         # ------------------- #
         with torch.no_grad():
-            # Get probabilities for next state
-            _, next_probs, next_log_probs = self.actor.sample(next_state)
+            # Sample next action from current policy
+            next_action, next_log_probs, _ = self.actor.sample(next_state)
             
-            # Get Q-values for next state from target critic
-            q1_next, q2_next = self.critic_target(next_state)
+            # Twin critics: use min(Q1, Q2) to prevent overestimation
+            q1_next, q2_next = self.critic_target(next_state, next_action)
             q_next = torch.min(q1_next, q2_next)
             
-            # Soft Value: V(s') = E_a [ Q(s',a) - alpha * log_pi(a|s') ]
-            # Sum over all actions: sum(probs * (q - alpha * log_probs))
-            v_next = torch.sum(next_probs * (q_next - self.alpha * next_log_probs), dim=1, keepdim=True)
-            
-            target_q = reward + not_done * self.gamma * v_next
+            # Soft Value: V(s') = Q(s',a') - α·log_π(a'|s')
+            target_q = reward + not_done * self.gamma * (q_next - self.alpha * next_log_probs)
         
         # Current Q estimates
-        q1, q2 = self.critic(state) # (B, ActionDim)
+        q1, q2 = self.critic(state, action)
         
-        # Standard SAC Loss
-        q1_taken = q1.gather(1, action.view(-1, 1))
-        q2_taken = q2.gather(1, action.view(-1, 1))
-        sac_loss = F.mse_loss(q1_taken, target_q) + F.mse_loss(q2_taken, target_q)
-        
-        # CQL Loss: log(sum(exp(Q))) - Q(s, a)
-        if self.cql_weight > 0:
-            cql_loss1 = torch.logsumexp(q1, dim=1).mean() - q1_taken.mean()
-            cql_loss2 = torch.logsumexp(q2, dim=1).mean() - q2_taken.mean()
-            critic_loss = sac_loss + self.cql_weight * (cql_loss1 + cql_loss2)
-        else:
-            critic_loss = sac_loss
+        # Standard SAC Critic Loss
+        sac_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
+        critic_loss = sac_loss 
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        # Gradient clipping for stability
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_clip)
         self.critic_optimizer.step()
         
         # ------------------- #
         #  Actor Update       #
+        #  Paper IV-A: Maximize E[Q - α·log_π]
+        #  Loss: α·log_π - Q
         # ------------------- #
-        _, probs, log_probs = self.actor.sample(state)
-        q1_pi, q2_pi = self.critic(state)
+        new_action, log_probs, _ = self.actor.sample(state)
+        q1_pi, q2_pi = self.critic(state, new_action)
         q_pi = torch.min(q1_pi, q2_pi)
         
-        # Objective: Maximize E[Q - alpha * log_pi]
-        # Loss: Minimize -sum(probs * (Q - alpha * log_probs))
-        sac_actor_loss = torch.sum(probs * (self.alpha * log_probs - q_pi), dim=1).mean()
-        
-        # Behavior Cloning Loss (Supervised)
-        # Maximize log_prob(action_taken)
-        # Minimize -log_prob(action_taken)
-        if self.bc_weight > 0:
-            # We need log_probs of the *taken* action, not sampled
-            # probs: (B, A)
-            dist = torch.distributions.Categorical(probs)
-            log_prob_taken = dist.log_prob(action.view(-1))
-            bc_loss = -log_prob_taken.mean()
-            
-            actor_loss = sac_actor_loss + self.bc_weight * bc_loss
-        else:
-            actor_loss = sac_actor_loss
+        actor_loss = (self.alpha * log_probs - q_pi).mean()
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_clip)
         self.actor_optimizer.step()
         
         # ------------------- #
         #  Alpha Update       #
+        #  Paper IV-A: Dynamic temperature tuning
+        #  α_loss = -α·(log_π + H_target)
         # ------------------- #
+        entropy = -log_probs.mean().item()
+        
         if self.auto_alpha:
-            # Alpha Loss: -alpha * (log_pi + target_entropy)
-            # Using current probs directly without re-sampling for efficiency (approx)
-            alpha_loss = torch.sum(probs.detach() * (-self.log_alpha * (log_probs.detach() + self.target_entropy)), dim=1).mean()
+            alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
             
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
@@ -135,8 +159,9 @@ class SACAgent:
 
         # ------------------- #
         #  Polyak Update      #
+        #  Soft target update: θ_target ← τ·θ + (1-τ)·θ_target
         # ------------------- #
         for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
             target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
             
-        return critic_loss.item(), actor_loss.item(), self.alpha, list(q1.detach().cpu().numpy())
+        return critic_loss.item(), actor_loss.item(), self.alpha, list(q1.detach().cpu().numpy()), entropy

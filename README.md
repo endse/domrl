@@ -1,95 +1,101 @@
-# DOM-RL
+# DOM-RL: Dynamic Multi-Objective Deep Reinforcement Learning for Real-Time Recommendation
 
-**Dynamic Multi-Objective Deep Reinforcement Learning for Real-Time Recommendation**
+A framework for real-time adaptive recommendations that moves beyond static, offline-trained models. DOM-RL tracks micro-behavioral signals (scroll velocity, hover duration, skip-rate gradients) and uses a **Hybrid SAC-NSGA-II** architecture to balance conflicting objectives: engagement, satisfaction, diversity, fairness, and churn mitigation.
 
-DOM-RL is an advanced recommendation framework that uses Hierarchical Reinforcement Learning to dynamically balance conflicting business objectives (Engagement, Satisfaction, Diversity, Fairness) in real-time.
+## Architecture
 
-It features a robust **Offline-to-Online** pipeline, a **Generative User Simulator** with realistic boredom dynamics, and a professional **Live Command Center** for inspection.
-
-![Dashboard Preview](https://via.placeholder.com/800x400?text=DOM-RL+Enterprise+Dashboard)
-
-## 🚀 Key Features
-
-### 1. Enterprise Command Center
-A professional Streamlit-based dashboard (`app.py`) for live interaction and inspection.
--   **Real-Time Confidence**: Displays the Policy Network's raw certainty (0-100%).
--   **Objective Override**: Manually force the agent to prioritize "Fairness" or "Diversity" to test its adaptability.
--   **Internal Diagnostics**: Visualize the **CVaR Risk Distribution** (Quantile Regression) and raw state vectors.
--   **Model Hot-Swapping**: Automatically detects and loads the latest training checkpoints without restarting.
-
-### 2. Generative User Simulator v2
--   **Boredom Dynamics**: The simulator now models "feature fatigue". Repeatedly recommending the same category triggers a satisfaction penalty (churn risk).
--   **Diversity Bonus**: Users receive a dopamine boost (Satisfaction +) when presented with a diverse slate of unique items.
--   **Latent State GRU**: Models hidden intent evolution using a Gated Recurrent Unit.
-
-### 3. Hierarchical & Distributional RL
--   **Weight Agent**: A Meta-Controller using **Distributional RL** to output dynamic objective weights $w$. It balances **Performance** vs **Risk** (CVaR).
--   **SAC Agent**: A Soft Actor-Critic agent (now scaled to 512 hidden units) that maps state + weights to the optimal **Slate** of recommendations.
-
----
-
-## 📦 Installation
-
-### Prerequisites
-- Python 3.8+
-- [MovieLens 25M Dataset](https://grouplens.org/datasets/movielens/25m/) (Optional, for offline training)
-
-### Setup
-1. Clone the repository.
-2. Create and activate a virtual environment:
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
----
-
-## 🛠️ Usage
-
-### 1. 🖥️ Launch the Enterprise Dashboard
-Evaluate the agent in real-time using the interactive Command Center.
-```powershell
-streamlit run app.py
 ```
-*   **Mission Control**: Use the sidebar to switch Personas (Critic, Binger) or enable Manual Overrides.
-*   **Analytics Tab**: Watch Satisfaction trends and Weight adaptation in real-time.
-
-### 2. 🧠 Training the Brain
-Train the agent to adapt to the new "Boredom" dynamics.
-
-**High-Accuracy Run (Default):**
-Optimized for performance (Batch Size 256, 2000 Episodes).
-```powershell
-python train.py
+User Session
+    │
+    ▼
+┌──────────────────────────┐
+│  Micro-Behavioral Tracker │  ← Scroll Velocity, Hover-Dwell, Skip Gradients
+│  (UserDynamicsNet + GRU)  │
+└──────────┬───────────────┘
+           │ State (6-dim micro + history + persona)
+           ▼
+┌──────────────────────────┐     ┌──────────────────────┐
+│     SAC Agent (Actor)     │◄────│   Weight Agent        │
+│  Gaussian Policy + tanh   │     │  (Hybrid SAC-NSGA-II) │
+│  Twin Critics (Q1, Q2)    │     │  5-Objective Weights   │
+└──────────┬───────────────┘     └──────────┬───────────┘
+           │ Action Embedding (16-dim)       │ Pareto-optimal weights
+           ▼                                 │
+┌──────────────────────────┐                 │
+│   Recommendation Env      │◄───────────────┘
+│  Slate → Simulator → Reward│
+│  5 Objectives:             │
+│   1. Engagement (CTR)      │
+│   2. Satisfaction          │
+│   3. Diversity             │
+│   4. Fairness              │
+│   5. Churn Mitigation      │
+└──────────────────────────┘
 ```
 
-**Hybrid Run (Offline + Online):**
-Warm-start with MovieLens data before fine-tuning online.
-```powershell
-python train.py --dataset_path "C:/path/to/dataset" --cql_weight 1.0 --bc_weight 0.5
+## Key Features
+
+- **Granular Feature Engineering (GFE)**: Extracts intent from scroll velocity, hover-dwell ratios, and skip-rate temporal gradients
+- **Soft Actor-Critic (SAC)**: Maximum entropy RL with twin critics, dynamic temperature α, and tanh squashing correction
+- **NSGA-II Optimizer**: Non-dominated sorting, crowding distance, SBX crossover for Pareto-optimal weight discovery
+- **Hybrid SAC-NSGA-II**: NSGA-II pre-optimizes the weight space; SAC fine-tunes via gradient descent
+- **Cold Start Inference**: Infers user persona from navigation patterns within first 5 interactions
+- **5-Objective Optimization**: Engagement, Satisfaction, Diversity, Fairness, Churn Mitigation
+
+## Project Structure
+
+```
+domrl/
+├── agent/
+│   ├── sac.py              # SAC agent (entropy-regularized policy)
+│   ├── weight_agent.py     # Hybrid SAC-NSGA-II weight optimization
+│   ├── nsga2.py            # NSGA-II (non-dominated sorting, crowding distance)
+│   └── baselines.py        # Random/Static baseline agents
+├── env/
+│   ├── rec_env.py          # Gymnasium environment (5-objective MOMDP)
+│   └── user_simulator.py   # Generative user simulator with micro-behavioral signals
+├── models/
+│   └── networks.py         # Actor, Critic, StateEncoder (LayerNorm, 6-dim micro)
+├── utils/
+│   ├── replay_buffer.py    # Experience replay (6-dim micro, 5-dim weights)
+│   ├── data_loader.py      # Netflix/MovieLens data loading
+│   ├── movie_db.py         # Movie database with ANN search
+│   └── slate_utils.py      # Slate combinatorial mapper
+└── config.py               # Configuration (NSGA-II params, thresholds)
 ```
 
-### 3. 📊 Analysis Tools
-DOM-RL includes a suite of visualization scripts:
--   `collect_granular_data.py`: Generates detailed behavioral logs.
--   `generate_gallery.py`: Creates ~40 plots in `logs/gallery/` (State t-SNE, Weight Distributions, etc.).
--   `finds.md`: A comprehensive auto-generated technical report.
+## Quick Start
 
----
+### Verify Installation
+```bash
+python verify_v3.py
+```
 
-## 🧩 Project Structure
+### Train
+```bash
+python train.py --max_episodes 2000 --slate_size 3
+```
 
-- `domrl/`
-    - `agent/`: **SACAgent** (CQL+BC, 512 units) and **WeightAgent** (Distributional).
-    - `env/`: `RealTimeRecEnv` and `GenerativeUserSimulator` (Boredom Logic).
-    - `models/`: Network architectures (`StateEncoder`, `UserDynamicsNet`).
-- `app.py`: **Enterprise Dashboard** source code.
-- `train.py`: Main training loop with Hit Rate tracking.
-- `logs/`: Checkpoints (`actor_*.pth`) and TensorBoard logs.
+### Key Arguments
+| Argument | Default | Description |
+|---|---|---|
+| `--max_episodes` | 2000 | Training episodes |
+| `--nsga2_pop_size` | 50 | NSGA-II population size |
+| `--nsga2_generations` | 20 | Generations per evolution |
+| `--nsga2_evolve_interval` | 10 | Episodes between evolutions |
+| `--slate_size` | 3 | Recommendation slate size |
 
-## License
-MIT
+## Paper Reference
+
+> **Dynamic Multi-Objective Deep Reinforcement Learning for Real-Time Recommendation (DOM-RL)**
+>
+> Keywords: SAC, NSGA-II, MORL, Micro-behavioral Tracking, Netflix 1M Dataset
+
+## Requirements
+
+- Python 3.10+
+- PyTorch
+- Gymnasium
+- pandas, numpy
+- tensorboard
+- python-dotenv

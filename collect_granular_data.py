@@ -29,7 +29,8 @@ def collect_data(episodes=100):
     env = RealTimeRecEnv()
     state_dim = 0 # Dict compatibility
     action_dim = env.action_space.n
-    agent = SACAgent(state_dim, action_dim, hidden_dim=512)
+    num_items = env.num_categories
+    agent = SACAgent(state_dim, action_dim, num_items=num_items, hidden_dim=512)
     
     load_latest_actor(agent)
     

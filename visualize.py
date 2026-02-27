@@ -37,10 +37,14 @@ def plot_latest_log_and_save():
     axs[0, 1].set_ylim(0, 1.1)
     
     # 3. Q-Value (Critic)
-    axs[1, 0].plot(data['episode'], data['avg_q'], label='Avg Q-Value', color='purple')
-    axs[1, 0].set_title('Average Q-Value (Critic Estimate)')
-    axs[1, 0].set_xlabel('Episode')
-    axs[1, 0].set_ylabel('Q-Value')
+    if 'avg_q' in data.columns:
+        axs[1, 0].plot(data['episode'], data['avg_q'], label='Avg Q-Value', color='purple')
+        axs[1, 0].set_title('Average Q-Value (Critic Estimate)')
+        axs[1, 0].set_xlabel('Episode')
+        axs[1, 0].set_ylabel('Q-Value')
+    else:
+        axs[1, 0].set_title("Avg Q-Value (Not Available)")
+        axs[1, 0].text(0.5, 0.5, "Data not logged", ha='center')
     
     # 4. Losses
     axs[1, 1].plot(data['episode'], data['critic_loss'], label='Critic Loss', color='orange', alpha=0.7)

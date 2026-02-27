@@ -1,19 +1,18 @@
-# DOM-RL: Advanced Technical Deep Dive
+# DOM-RL v3.0: Advanced Technical Deep Dive
 
-**Dynamic Multi-Objective Reinforcement Learning with Generative User Simulation**
+**Dynamic Multi-Objective Deep Reinforcement Learning for Real-Time Recommendation**
 
-This document serves as the comprehensive technical reference for the DOM-RL framework. It details the system architecture, the new generative simulation engine, and the advanced reinforcement learning techniques used to solve the multi-objective slate recommendation problem. This document also includes a gallery of visualizations analyzing the agent's behavior.
+This document serves as the comprehensive technical reference for the DOM-RL framework (Paper-Aligned v3.0). It details the hybrid SAC-NSGA-II architecture, granular feature engineering with enriched micro-behavioral signals, 5-objective multi-objective optimization, cold start inference, and full analysis gallery.
 
 ---
 
 # Part 1: System Architecture & Logic
 
-## 1. System Ecosystem
+## 1. System Ecosystem (Paper IV-E)
 
-The DOM-RL framework is composed of two hierarchical agents interacting with a complex user environment. The diagram below illustrates the flow of information and control.
+The DOM-RL framework is composed of two hierarchical agents interacting with a complex user environment. A **Hybrid SAC-NSGA-II** architecture balances the global exploration of evolutionary algorithms with the adaptive fine-tuning of deep reinforcement learning.
 
-### Visualization: The DOM-RL Control Loop
-*This flowchart visualizes the cyclic interaction between the User, the Environment, and the two Agent tiers.*
+### Visualization: The DOM-RL Hybrid Control Loop
 
 ```mermaid
 graph TD
@@ -22,24 +21,26 @@ graph TD
     %% Generative Environment
     %% =========================
     subgraph Generative_Environment
-        U(("User Hidden State")) -->|Signals| S[State Vector]
+        U(("User Hidden State<br/>(GRU + Persona)")) -->|"Micro-Behavioral Signals<br/>(6-dim)"| S[State Vector]
         S -->|Observation| WA
         S -->|Observation| SA
     end
 
     %% =========================
-    %% Tier 1: Meta-Controller
+    %% Tier 1: Hybrid Meta-Controller
     %% =========================
-    subgraph Tier_1_Meta_Controller
-        WA[Weight Agent] -->|"Distributional RL"| W[Objective Weights w]
+    subgraph Tier_1_Hybrid_Meta_Controller
+        WA[Weight Agent] -->|"Distributional RL<br/>(QR-DQN)"| W["5-Objective Weights w"]
+        NSGA["NSGA-II Optimizer<br/>(Pareto Front)"] -->|"Seed Pareto Weights"| WA
         style WA fill:#f9f,stroke:#333,stroke-width:2px
+        style NSGA fill:#ff7b72,stroke:#333,stroke-width:2px
     end
 
     %% =========================
     %% Tier 2: Policy Agent
     %% =========================
-    subgraph Tier_2_Policy_Agent
-        SA[SAC Agent] -->|"Conservative Q-Learning"| A[Action Index]
+    subgraph Tier_2_SAC_Policy
+        SA["SAC Agent<br/>(Max Entropy RL)"] -->|"Embedding (16-dim)"| A[Action Vector]
         W -->|Conditions| SA
         style SA fill:#bbf,stroke:#333,stroke-width:2px
     end
@@ -48,39 +49,49 @@ graph TD
     %% Slate Engine
     %% =========================
     subgraph Slate_Engine
-        A -->|Maps to| SL{Slate Tuple}
+        A -->|ANN Search| SL{"Slate (k items)"}
         SL -->|Items| U
     end
 
     %% =========================
     %% Rewards and Updates
     %% =========================
-    U -->|Feedback| R[Base Rewards]
+    U -->|Feedback| R["5 Reward Objectives"]
     R -->|Scalarization| FR[Final Reward]
     FR -->|Update| WA
     FR -->|Update| SA
+    R -->|"Pareto Evaluation"| NSGA
 
 ```
 
-**Explanation:**
-1.  **User**: Produces noisy signals (clicks, hovers) based on a hidden internal state.
-2.  **Weight Agent (Meta-Controller)**: observes the state and determines the optimal balance of business objectives (e.g., "Prioritize Fairness vs. SAT").
-3.  **SAC Agent (Policy)**: Takes both the state and the weights to generate a specific action.
-4.  **Slate Engine**: Converts the abstract action index into a concrete list of 3 items (Slate) to show the user.
+**Key changes from v2.0:**
+1. **NSGA-II** now pre-optimizes the weight space, seeding the Weight Agent with Pareto-optimal solutions.
+2. **5 Objectives** replace the previous 4: Engagement, Satisfaction, Diversity, Fairness, and **Churn Mitigation**.
+3. **6-dim micro-signals** replace the 3-dim signals: scroll velocity, hover-dwell ratio, skip gradient + raw scroll, hover, view time.
+4. **Cold Start Phase** infers persona from navigation patterns before any click.
+5. **SAC** uses tanh squashing correction and gradient clipping for stability.
 
 ---
 
-## 2. Generative User Simulator (Sim-V2)
+## 2. Generative User Simulator (Sim-V3, Paper III-A)
 
-We have moved from a heuristic-based simulator to a **Generative Model** that mimics realistic user psychology.
+The simulator now implements **Granular Feature Engineering (GFE)** with three enriched micro-behavioral signal types:
 
-### Visualization: User State Machine
-*This state diagram illustrates the internal lifecycle of the simulated user during a single interaction step.*
+### Visualization: User State Machine with Micro-Behavioral Signals
 
 ```mermaid
 stateDiagram-v2
 
-    [*] --> Latent_Update : Agent presents slate
+    [*] --> Cold_Start : Session begins
+
+    state "0. Cold Start Phase" as Cold_Start
+    note right of Cold_Start
+        Observe scroll/hover patterns
+        Infer persona BEFORE any click
+        (Paper III Challenge C)
+    end note
+
+    Cold_Start --> Latent_Update : After 5 interactions
 
     state "1. Latent Update - GRU" as Latent_Update
     note right of Latent_Update
@@ -94,277 +105,245 @@ stateDiagram-v2
     note right of Choice_Model
         Evaluate items in slate
         Probabilistic selection via softmax
+        Apply mood + time context bias
     end note
 
-    Choice_Model --> Dynamics
+    Choice_Model --> Micro_Signals
 
-    state "3. Satisfaction Dynamics - SDE" as Dynamics
+    state "3. Micro-Behavioral Extraction" as Micro_Signals
+    note right of Micro_Signals
+        Scroll Velocity: search entropy
+        Hover-Dwell: engagement ratio
+        Skip Gradient: temporal analysis
+    end note
+
+    Micro_Signals --> Dynamics
+
+    state "4. Satisfaction Dynamics - SDE" as Dynamics
     note right of Dynamics
-        S_t drifts toward target satisfaction
-        Applies diffusion noise
+        Ornstein-Uhlenbeck process
+        Boredom penalty + diversity bonus
+        Churn probability tracking
     end note
 
-    Dynamics --> Signals
-
-    state "4. Signal Generation" as Signals
-    note right of Signals
-        Generate click, hover, scroll
-        Based on true intent match
-    end note
-
-    Signals --> [*] : Return observation
-
+    Dynamics --> [*] : Return (satisfaction, signals)
 
 ```
 
-**Explanation:**
--   **GRU Core**: The user has a "memory" modeled by a Gated Recurrent Unit neural network.
--   **Choice Model**: The user doesn't just randomly click. They evaluate the slate using a Multinomial Logit model, picking the item that best matches their current intent.
--   **Diffusion**: Satisfaction isn't static. It drifts over time like a random walk (Ornstein-Uhlenbeck process), creating realistic "mood swings".
+### Paper III-A: Three Signal Types
+
+| Signal | Operational Definition | Code Method | Interpretation |
+| :--- | :--- | :--- | :--- |
+| **Scroll Velocity** | Rate of vertical navigation (continuous) | `_compute_scroll_velocity()` | High = High-entropy search, Deceleration = Focus |
+| **Hover-Dwell Ratio** | Dwell time on card / total session duration | `_compute_hover_dwell()` | High = Active engagement, Low = Passive idle |
+| **Skip-Rate Gradient** | Timing-based skip analysis | `_compute_skip_gradient()` | <3s skip = Titular failure, >12s = Content quality |
+
+### Micro-Behavioral Signal Distributions
+![Micro-Behavioral Signals](logs/gallery_v3/micro_behavioral_signals.png)
+*Left: Scroll velocity distribution (high velocity indicates dissatisfied browsing). Center: Hover-dwell ratio (engagement vs idle). Right: Skip gradient with threshold markers for early vs late skips.*
 
 ---
 
-## 3. Offline-to-Online Transfer Pipeline
+## 3. Multi-Objective Optimization (Paper III-C)
 
-A key feature of DOM-RL is the ability to pre-train on static datasets (MovieLens) and transfer safely to the online simulator.
+### The 5-Objective Reward Vector
 
-### Visualization: The Safety Pipeline
-*This sequence diagram shows how a model graduates from offline data to online deployment.*
+DOM-RL models recommendation as a multi-objective optimization problem to balance short-term engagement with long-term trust.
 
-```mermaid
-sequenceDiagram
-    participant D as MovieLens Data
-    participant A as SAC Agent
-    participant C as Critic (CQL)
-    participant S as Simulator
+| Objective | Operational Definition | Primary Metric | Associated Risk |
+| :--- | :--- | :--- | :--- |
+| **Engagement** | Immediate interaction density | CTR / Watch Time | Algorithmic Fatigue |
+| **Satisfaction** | Intent-alignment accuracy | Retention Rate | Delayed Revenue |
+| **Diversity** | Genre/Content variety | Coverage Score | Relevance Loss |
+| **Fairness** | Persona satisfaction equity | Gap Minimization | Conservative Filtering |
+| **Churn Mitigation** | Probability of session termination | Inter-session Interval | Over-cautious |
 
-    Note over A, C: Phase 1: Offline Pre-Training
-    
-    loop Batch Training
-        D->>A: Historical Transition (s, a, r, s')
-        
-        par Behavior Cloning
-            A->>A: Minimize Divergence from Data Policy
-        and Conservative Q-Learning
-            C->>C: Penalize Q-values of Unseen Actions
-        end
-    end
-    
-    Note over A, S: Phase 2: Online Fine-Tuning
-    
-    loop Interaction
-        S->>A: State s
-        A->>S: Action a (Exploration)
-        S->>A: Reward r (Real-time feedback)
-        A->>A: Update Policy (Gradual shift)
-    end
-```
+### Reward Composition Analysis
+![Reward Composition](logs/gallery_v3/reward_composition_5obj.png)
+*Left: Proportional contribution of each objective. Right: Mean absolute reward magnitude per objective.*
 
-**Explanation:**
--   **Offline Phase**: We use **Behavior Cloning (BC)** to force the agent to mimic human curators initially. **CQL** ensures the critic doesn't overestimate rewards for actions it hasn't seen in the dataset.
--   **Online Phase**: Once deployed, the agent gradually explores. The constraints (BC/CQL) are relaxed, allowing better-than-human performance.
+### 5-Objective Performance Radar
+![Objective Radar](logs/gallery_v3/objective_radar.png)
+*Normalized radar chart showing the agent's average performance across all 5 objectives.*
 
 ---
 
-## 4. Fairness and Slate Logic
+## 4. NSGA-II: Pareto Optimization (Paper IV-D)
 
-The rewards and actions have been extended to support ethical AI and complex recommendations.
-
-### Visualization: Reward Composition (Pie Chart)
-*This chart breaks down the components of the 4D Reward Vector used in the Multi-Objective MDP.*
+### Visualization: NSGA-II Algorithm Flow
 
 ```mermaid
-pie title Reward Vector Components
-    "Engagement (Click/View)" : 40
-    "Satisfaction (User Happiness)" : 30
-    "Diversity (Slate Submodularity)" : 15
-    "Fairness (Exposure/Demographics)" : 15
+graph LR
+    A["Population<br/>(50 weight vectors)"] --> B["Non-Dominated<br/>Sorting"]
+    B --> C["Front 1 (Pareto)"]
+    B --> D["Front 2"]
+    B --> E["Front 3..."]
+    C --> F["Crowding<br/>Distance"]
+    F --> G["Selection"]
+    D --> G
+    G --> H["SBX Crossover"]
+    H --> I["Polynomial<br/>Mutation"]
+    I --> J["Elitist<br/>Combination"]
+    J --> A
+
+    style C fill:#ff7b72,stroke:#333
+    style F fill:#ffa657,stroke:#333
 ```
 
-**Explanation:**
--   **Engagement**: Standard interaction metrics (CTR).
--   **Satisfaction**: Long-term user retention proxy.
--   **Diversity**: A submodular penalty applied if the items in the slate are too similar (e.g., 3 Action movies).
--   **Fairness**:
-    -   *Exposure*: Boosts reward for items that appear in the "Long Tail" (rarely visited).
-    -   *Demographic*: Boosts reward for satisfying underserved persona groups (e.g., "Critics").
+### Pareto Front Projections
+![NSGA-II Pareto Front](logs/gallery_v3/nsga2_pareto_front.png)
+*2D projections of the Pareto front across objective pairs. Red points are non-dominated solutions; grey points are dominated. The agent operates on this frontier to balance conflicting objectives.*
+
+### Weight Population Diversity
+![NSGA-II Weight Population](logs/gallery_v3/nsga2_weight_population.png)
+*Bar chart showing the diversity of weight vectors in the NSGA-II population. White bars with red borders indicate the best balanced solution from the Pareto front.*
+
+---
+
+## 5. Cold Start Problem (Paper III, Challenge C)
+
+### The Dynamic Cold Start Solution
+
+Traditional systems require ratings history to function. DOM-RL's Cold Start module infers user persona from **navigation style** within the first 5 interactions:
+
+| Navigation Pattern | Inferred Persona |
+| :--- | :--- |
+| Fast scroll (>5), low hover (<1.5s) | **Binger** (rapid consumption) |
+| Slow scroll (<2), high hover (>2.5s) | **Critic** (careful evaluation) |
+| Variable scroll variance (>3.0) | **Browser** (exploring) |
+| Default / moderate | **Standard** |
+
+### Cold Start vs Warm Phase Analysis
+![Cold Start Analysis](logs/gallery_v3/cold_start_analysis.png)
+*Left: Scroll velocity distribution during cold start vs warm phase. Center: Hover-dwell ratio comparison. Right: Persona distribution after inference.*
 
 ---
 
 # Part 2: Comprehensive Model Analysis (Gallery)
 
-The following sections analyze the agent's behavior using granular visualization data.
+## 6. Signal-Outcome Correlations
+Deep correlations between micro-behavioral signals and final outcomes.
 
-## 1. Chapter 1: The User Model (State Analysis)
-The agent operates in a continuous state space representing User Behavior and Context.
+### Correlation Matrix
+![Signal Correlations](logs/gallery_v3/signal_correlations.png)
+*6-panel correlation analysis. Row 1: Signals vs Satisfaction. Row 2: Signals vs Reward. Each panel shows scatter plot with trend line and Pearson r value.*
 
-### Feature Distributions
-Understanding the input distribution is crucial for verifying the environment simulation.
-
-| Metric | Distribution | Explanation |
-| :--- | :--- | :--- |
-| **Enthusiasm** | ![Enthusiasm](logs/gallery/dist_Enthusiasm.png) | User's base likelihood to interact. Uniformly distributed. |
-| **Time of Day** | ![Time](logs/gallery/dist_TimeOfDay.png) | Ranges 0-24h. Ensures agent learns temporal patterns. |
-| **Scroll Velocity** | ![Scroll](logs/gallery/dist_ScrollVel.png) | Key indicator of satisfaction. High velocity = Disinterest. |
-| **Hover Duration** | ![Hover](logs/gallery/dist_Hover.png) | Detailed engagement metric. |
-| **View Time** | ![View](logs/gallery/dist_ViewTime.png) | Total time spent on item. |
-
-### Global Overview
-The pairplot below shows the complex interactions between State parameters, Reward, and Scenarios.
-![Pairplot](logs/gallery/pairplot_overview.png)
-*Observation*: Notice how 'Satisfaction' clusters distinctly based on the 'Scenario' (Hue).
+**Key Observations:**
+- **Scroll Velocity vs Satisfaction**: Expected negative correlation (high velocity = dissatisfied browsing)
+- **Hover-Dwell vs Satisfaction**: Positive correlation (engaged users linger)
+- **Skip Gradient vs Reward**: Positive correlation (non-skipping produces higher rewards)
 
 ---
 
-## 2. Chapter 2: The Business Brain (Dynamic Weights)
-The core innovation of DOM-RL is adapting to dynamic objective weights.
+## 7. Churn Dynamics (Paper III-C)
 
-### Weight Landscapes
-| Objective | Weight Distribution | Impact Analysis |
-| :--- | :--- | :--- |
-| **Engagement** | ![wEng](logs/gallery/dist_w_Eng.png) | prioritizing Clicks. |
-| **Satisfaction** | ![wSat](logs/gallery/dist_w_Sat.png) | Prioritizing user happiness. |
-| **Churn Penalty** | ![wChurn](logs/gallery/dist_w_Churn.png) | Prioritizing safety/retention. |
+### Churn Probability Analysis
+![Churn Dynamics](logs/gallery_v3/churn_dynamics.png)
+*Left: Distribution of churn probability across all steps. Right: Scatter plot of satisfaction vs churn probability with trend line, confirming the inverse relationship.*
 
-### Multi-Dimensional Weight View
-![Landscape](logs/gallery/weight_landscape.png)
-This scatter plot visualizes the variance in business priorities the agent faces. Each point is an episode.
-
-### Impact on Rewards
-Does increasing the weight actually increase the reward signal?
-*   ![Reward vs Eng](logs/gallery/reward_vs_w_Eng.png)
-*   ![Reward vs Sat](logs/gallery/reward_vs_w_Sat.png)
-*   ![Reward vs Churn](logs/gallery/reward_vs_w_Churn.png)
-
-*Validation*: We see correlations indicating that when a weight is high, the agent can achieve higher total scalar rewards by optimizing that specific objective.
+**Mechanism:**
+- Consecutive low-satisfaction steps (< 0.3) increase churn probability by 0.1 per step
+- Recovery (satisfaction above threshold) gradually decreases churn risk
+- The **Churn Mitigation** objective incentivizes the agent to prevent this spiral
 
 ---
 
-## 3. Chapter 3: Decision Making (Actions)
-How does the agent translate state into action?
+## 8. Hybrid SAC-NSGA-II Weight Dynamics (Paper IV-E)
 
-### Action Distribution
-| Overall Counts | By Scenario |
-| :--- | :--- |
-| ![Counts](logs/gallery/action_counts.png) | ![By Scenario](logs/gallery/action_by_scenario.png) |
-| The agent learns to prefer certain categories. | **Critical**: Notice the shift in action distribution when switching from 'Growth' to 'Safety'. |
+### Dynamic Weight Adaptation
+![Weight Dynamics](logs/gallery_v3/weight_dynamics_hybrid.png)
+*Top: 5-objective weight adaptation over time (smoothed). The Weight Agent does NOT converge to static weights --- it oscillates to match changing user states. Bottom: Per-objective reward dynamics showing how the system balances competing signals.*
 
-### Temporal Strategy
-Does the agent behave differently at different times of day?
-![Heatmap](logs/gallery/heatmap_action_time.png)
-*   **Heatmap**: Shows average reward for (Action, Time) pairs. The diagonal pattern suggests the agent has learned the `Time % 10` preference rule hidden in the environment!
-
-### Action Dominance
-![Dominance](logs/gallery/action_dominance.png)
-This histogram checks if the agent is "collapsing" to a single action. A spread indicates healthy exploration.
+**Critical Insight:** The weights are not static. The hybrid architecture:
+1. **NSGA-II** evolves diverse weight populations every 5 episodes
+2. **WeightNetwork** refines via gradient descent with Pareto-seeding loss
+3. Together they maintain the "Trust Loop" without sacrificing interaction metrics
 
 ---
 
-## 4. Chapter 4: Correlations & Dynamics
-Deep dive into the physics of the RecEnv.
+## 9. Episode Case Studies
 
-### Correlations
-| X-Axis | Y-Axis | Plot | Insight |
-| :--- | :--- | :--- | :--- |
-| **Scroll Vel** | **Satisfaction** | ![S-S](logs/gallery/scatter_ScrollVel_Satisfaction.png) | Strong negative interaction. Faster scroll = Lower Sat. |
-| **Hover** | **Satisfaction** | ![H-S](logs/gallery/scatter_Hover_Satisfaction.png) | Positive correlation. |
-| **Enthusiasm** | **Reward** | ![E-R](logs/gallery/scatter_Enthusiasm_Reward.png) | Higher enthusiasm generally leads to easy rewards. |
-| **Scroll Vel** | **Reward** | ![S-R](logs/gallery/scatter_ScrollVel_Reward.png) | Agent learns to minimize scroll velocity. |
-
-### Global Trends
-![Sat Trend](logs/gallery/global_sat_trend.png)
-Moving average of user satisfaction across the entire data collection run.
-
-![Churn Step](logs/gallery/churn_step_dist.png)
-**Churn Analysis**: This histogram shows *when* users leave. Spikes at low step counts indicate early dissatisfaction (Critical failures).
-
----
-
-## 5. Chapter 5: Episode Case Studies
-Trace analysis of individual episodes to see step-by-step dynamics.
+Detailed step-by-step traces showing all signals, rewards, and weight dynamics within single episodes.
 
 ### Trace 1
-![Trace1](logs/gallery/trace_ep_1_80.png)
-*   **Green**: Satisfaction | **Blue**: Reward | **Purple**: Actions | **Orange**: Scroll
-*   Observe how Satisfaction dips cause Scroll Velocity spikes.
+![Episode Trace 1](logs/gallery_v3/episode_trace_1.png)
+*Panel 1: Reward (blue) and Satisfaction (green). Panel 2: Micro-behavioral signals (scroll velocity, hover-dwell ratio, skip gradient). Panel 3: Chosen content categories. Panel 4: Dynamic 5-objective weight changes.*
 
 ### Trace 2
-![Trace2](logs/gallery/trace_ep_2_15.png)
-*   A longer episode. Note the stability of actions once a good match is found.
+![Episode Trace 2](logs/gallery_v3/episode_trace_2.png)
+*Observe how scroll velocity spikes correlate with satisfaction dips, and the agent adapts weights in response.*
 
 ### Trace 3
-![Trace3](logs/gallery/trace_ep_3_97.png)
-*   Example of recovery or failure.
-
-### Trace 4
-![Trace4](logs/gallery/trace_ep_4_85.png)
-
-### Trace 5
-![Trace5](logs/gallery/trace_ep_5_80.png)
-*   Likely a 'Safety' scenario where the agent is very careful to maintain satisfaction.
+![Episode Trace 3](logs/gallery_v3/episode_trace_3.png)
+*Example showing the interplay between churn mitigation weight increases during periods of sustained low satisfaction.*
 
 ---
 
-## 6. Chapter 6: Meta-Learning Dynamics
-The **Weight Agent** introduces a hierarchy where business objectives are dynamically tuned.
+## 10. Training Summary
 
-### Training Progress
-![Training Summary](logs/gallery/training_summary.png)
-*   **Panel 1 (Rewards)**: Shows the agent reliably maintaining satisfaction (Green line) while maximizing scalar reward.
-*   **Panel 2 (Weights)**: The most critical insight. The Weight Agent does NOT converge to static weights. Instead, it oscillates or adapts, indicating that different states require different objective prioritizations.
-*   **Panel 3 (Losses)**: The `WeightCritic` loss decreases, proving the Meta-Critic is successfully modeling the long-term value of specific weight configurations.
+### Episode-Level Training Progress
+![Training Summary](logs/gallery_v3/training_summary.png)
+*Panel 1: Episode rewards with moving average. Panel 2: Final satisfaction per episode (baseline = 0.5). Panel 3: Episode length (red bars = early churn, green = full episode).*
 
 ---
 
-## 7. Chapter 7: Benchmarks & Personas
-To validate the model's effectiveness, we benchmarked it against baselines and introduced complex user personas.
+## 11. Context Awareness
 
-### Benchmark Results
-![Benchmark](logs/gallery/benchmark_summary.png)
-*   **Performance**: The DOM-RL (SAC) agent consistently outperforms Random and Static baselines across all scenarios.
-*   **Adaptability**: In the 'Safety' scenario (high churn penalty), the agent matches the 'Balanced' performance while minimizing churn, whereas baselines fail.
+### The Mood-Context Bias Matrix
+![Mood Bias Heatmap](logs/gallery_v3/mood_bias_heatmap.png)
+*Heatmap of logit biases applied by the simulator. Red = positive bias (e.g., Happy -> Comedy +2.0), Blue = negative bias (e.g., Tired -> Thriller -1.0). This matrix proves the environment dynamically adapts to user emotional context.*
 
 ### User Personas
-The environment now simulates 4 distinct user archetypes:
-1.  **Standard**: Balanced behavior.
-2.  **Binger**: High base enthusiasm (`Enthusiasm > 0.8`), easier to satisfy.
-3.  **Browser**: High scroll velocity (`Scroll > 50`), difficult to engage (low hover).
-4.  **Critic**: Hard to satisfy (`Satisfaction` decays 2x faster), requires perfect matches.
 
-The Weight Agent must learn to identify these personas from the state (`user_features` + `micro_signals`) and adjust its strategy accordingly.
+The environment simulates 4 distinct user archetypes inferred via Cold Start:
 
+| Persona | Behavior Profile | Churn Threshold |
+| :--- | :--- | :--- |
+| **Standard** | Balanced, moderate engagement | 0.2 |
+| **Binger** | High enthusiasm, rapid consumption | 0.1 (more tolerant) |
+| **Browser** | High scroll variance, exploration-focused | 0.2 |
+| **Critic** | Slow, careful evaluation, hard to satisfy | 0.3 (least tolerant) |
+
+---
+
+## 12. SAC Algorithm Details (Paper IV-A, IV-B)
+
+### Architecture Summary
+
+```mermaid
+graph TD
+    subgraph "SAC Agent (Paper IV-B)"
+        S["State<br/>(6 micro + history + persona)"] --> Actor["Actor Network<br/>(Gaussian Policy)"]
+        Actor --> |"Reparameterization<br/>x = mu + sigma * N(0,1)"| TH["tanh Squashing"]
+        TH --> |"Action a in [-1,1]^16"| ENV["Environment"]
+
+        S --> C1["Critic Q1"]
+        S --> C2["Critic Q2"]
+        C1 --> MIN["min(Q1, Q2)<br/>(Anti-Overestimation)"]
+        C2 --> MIN
+
+        MIN --> |"Soft Bellman Target"| TGT["Target Q<br/>= r + gamma * (Q' - alpha * log pi)"]
+
+        Alpha["Dynamic Alpha<br/>(Temperature)"] --> |"Controls Exploration<br/>vs Exploitation"| Actor
+    end
+
+    style Actor fill:#bbf,stroke:#333
+    style C1 fill:#58a6ff,stroke:#333
+    style C2 fill:#58a6ff,stroke:#333
+    style Alpha fill:#ffa657,stroke:#333
+```
+
+### Key Formulae
+
+| Component | Formula | Paper Reference |
+| :--- | :--- | :--- |
+| **Objective** | J(pi) = Sum E[r(s,a) + alpha * H(pi)] | Paper IV-A Eq. 1 |
+| **Soft Bellman** | Q(s,a) = r + gamma * E[Q(s',a') - alpha * log pi(a'\|s')] | Paper IV-B Eq. 2 |
+| **tanh Correction** | log pi -= log(1 - tanh(x)^2 + eps) | Paper IV-B |
+| **Alpha Loss** | -alpha * (log pi + H_target) | Paper IV-A |
+| **Target Entropy** | H_target = -log(1/\|A\|) * 0.98 | Paper IV-A |
 
 ---
 
-## 8. Chapter 8: Feature Analysis - HITL & Context
-**New Features (v2.0)**: We introduced real-time Human-in-the-Loop feedback and Context Awareness.
-
-### Context Awareness: User Mood
-How does the simulator adapt to "Emotional Context"?
-![Mood Sad](logs/gallery/context_mood_sad.png)
-*   **Validation**: When the user context is set to **"Sad"**, the preference distribution shifts significantly towards **Comedy** (Cheer up) and **Drama** (wallow). The agent must learn to detect this shift or rely on the explicit context signal.
-
-### Temporal Dynamics: Time of Day
-![Time Night](logs/gallery/context_time_night.png)
-*   **Validation**: At **23:00 (Night)**, the preference for **Horror** and **Thriller** spikes, while "Daytime" genres like Documentary drop. This proves the Time-of-Day control effectively biases the simulation.
-
-### Human-in-the-Loop Adaptation
-Does the "Like" button actually work?
-![HITL Boost](logs/gallery/hitl_enthusiasm_boost.png)
-*   **Validation**: A manual **"Like"** interaction (at Step 5) causes an immediate, stepwise jump in **User Enthusiasm**. This triggers the system to transition from explore/safety mode to exploitation (high reward state).
-
-### Persona DNA Analysis (Radar Chart)
-We analyzed the theoretical "Taste Profiles" of our 4 simulated personas to ensure distinct behavior.
-![Radar Persona](logs/gallery/radar_personas.png)
-*   **Insight**: The **Standard** user (Blue) has a balanced, circular profile. The **Critic** (Red) shows sharp spikes for "Serious" genres (Drama, Doc, Noir) while rejecting "Popcorn" movies. The **Binger** (Green) consumes almost everything but leans towards entertainment.
-
-### The "Mood Matrix" (Heatmap)
-How does internal state bias external action?
-![Mood Matrix](logs/gallery/heatmap_mood_bias.png)
-*   **Insight**: This heatmap reveals the hidden **Logit Bias** applied by the simulator.
-    *   **Red Zones**: High positive bias (e.g., Happy -> Comedy).
-    *   **Blue Zones**: Negative bias (e.g., Tired -> Thriller).
-    *   This matrix proves the environment is not static; it "breathes" based on user context.
-
----
-*Generated for DOM-RL Project. Updated 2026-02-01.*
+*Generated for DOM-RL Project v3.0 (Paper-Aligned). Updated 2026-02-27.*
+*Plot source: `generate_plots_v3.py` | Verification: `verify_v3.py` (ALL TESTS PASSED)*

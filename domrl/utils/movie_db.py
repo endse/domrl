@@ -60,6 +60,14 @@ class MovieDatabase:
         # Precompute mappings
         self._build_mappings()
         
+        # Initialize Embeddings
+        self.embedding_dim = 16
+        self.item_embeddings = None
+        self.category_embeddings = np.random.randn(10, self.embedding_dim) # 10 Categories
+        # Normalize
+        self.category_embeddings /= np.linalg.norm(self.category_embeddings, axis=1, keepdims=True)
+        self._build_item_embeddings()
+
     def _get_category(self, genre_str):
         if not isinstance(genre_str, str): return 0
         first_genre = genre_str.split('|')[0]
@@ -75,6 +83,50 @@ class MovieDatabase:
         grouped = self.movies.groupby('category')
         self.cat_movie_map = {cat: group['movieId'].tolist() for cat, group in grouped}
         
+    def _build_item_embeddings(self):
+        """
+        Constructs a simple embedding matrix for all movies.
+        E(movie) = E(category) + small_random_noise
+        This allows 'nearest neighbor' to find movies in the same genre, but distinct items.
+        """
+        # We need a dense index for movies (0 to N-1) to map to matrix rows
+        # But movieId is sparse.
+        self.all_movie_ids = self.movies['movieId'].values
+        self.movie_id_to_idx = {mid: i for i, mid in enumerate(self.all_movie_ids)}
+        self.idx_to_movie_id = {i: mid for i, mid in enumerate(self.all_movie_ids)}
+        
+        num_movies = len(self.all_movie_ids)
+        self.item_matrix = np.zeros((num_movies, self.embedding_dim), dtype=np.float32)
+        
+        for i, mid in enumerate(self.all_movie_ids):
+            cat = self.movie_cat_map.get(mid, 0)
+            base_emb = self.category_embeddings[cat]
+            noise = np.random.normal(0, 0.1, size=self.embedding_dim)
+            emb = base_emb + noise
+            emb /= np.linalg.norm(emb) # Normalize
+            self.item_matrix[i] = emb
+            
+    def search_nearest_items(self, query_emb, k=1):
+        """
+        Finds k nearest movies to the query embedding (dot product).
+        query_emb: (Dim,)
+        Returns: List of (movie_id, title, score)
+        """
+        # Dot product scores
+        scores = np.dot(self.item_matrix, query_emb)
+        
+        # Top K
+        top_k_indices = np.argsort(scores)[-k:][::-1]
+        
+        results = []
+        for idx in top_k_indices:
+            mid = self.idx_to_movie_id[idx]
+            title = self.get_movie_title(mid)
+            score = scores[idx]
+            results.append((mid, title, score))
+            
+        return results
+
     def get_movie_title(self, movie_id):
         if self.movies is None: return "Unknown Movie"
         row = self.movies[self.movies['movieId'] == movie_id]
@@ -93,11 +145,6 @@ class MovieDatabase:
         
         if api_key and tmdb_id:
             return f"https://api.themoviedb.org/3/movie/{tmdb_id}/images?api_key={api_key}" 
-            # Note: The above returns JSON. The UI needs to fetch it. 
-            # Use a helper in the UI to resolve the final image path to avoid async here?
-            # actually, let's return the basic construct and let the UI/Cache resolve it.
-            # No, that's messy. 
-            # Let's return a special object or just the ID for the UI to handle.
             pass
             
         # Fallback Placeholder

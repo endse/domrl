@@ -146,7 +146,7 @@ def evaluate(args):
     action_dim = env.action_space.n
     
     # Initialize Agents
-    sac_agent = SACAgent(0, action_dim, hidden_dim=512) # State dim 0 as placeholder
+    sac_agent = SACAgent(0, action_dim, num_items=env.num_categories, hidden_dim=512) # State dim 0 as placeholder
     load_latest_actor(sac_agent)
     
     random_agent = RandomAgent(action_dim)
@@ -216,8 +216,9 @@ def evaluate(args):
     print(summary)
 
 if __name__ == "__main__":
+    from domrl.config import cfg
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default=None, help="Path to MovieLens dataset for DR Eval")
+    parser.add_argument("--dataset_path", type=str, default=cfg.MOVIE_LENS_PATH, help="Path to MovieLens dataset for DR Eval")
     parser.add_argument("--slate_size", type=int, default=3, help="Size of recommendation slate")
     args = parser.parse_args()
     evaluate(args)
